@@ -1,0 +1,8 @@
+# Circuit build artifacts (large files)
+artifacts/*.sym
+artifacts/*.r1cs
+artifacts/*.wasm
+artifacts/*.wtns
+
+# Keep the directory structure
+!artifacts/.gitkeep

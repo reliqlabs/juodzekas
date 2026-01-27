@@ -48,10 +48,28 @@ pub struct GameSession {
     pub player_pubkey: Binary,
     pub dealer_pubkey: Binary,
     pub deck: Vec<Binary>, // Encrypted cards
-    pub player_hand: Vec<u8>,
+    pub hands: Vec<Hand>,
+    pub current_hand_index: u32,
     pub dealer_hand: Vec<u8>,
     pub status: GameStatus,
     pub last_card_index: u32,
+}
+
+#[cw_serde]
+pub struct Hand {
+    pub cards: Vec<u8>,
+    pub bet: Uint128,
+    pub status: HandStatus,
+}
+
+#[cw_serde]
+pub enum HandStatus {
+    Active,
+    Stood,
+    Busted,
+    Doubled,
+    Surrendered,
+    Settled { winner: String },
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

@@ -9,3 +9,17 @@ Cargo.lock
 # CosmWasm
 artifacts/
 checksums.txt
+
+# Circuit artifacts (large generated files)
+circuits/artifacts/*.sym
+circuits/artifacts/*.r1cs
+circuits/artifacts/*.wasm
+*.sym
+
+# ZK proof key caches (very large files - 180MB+)
+packages/zk-shuffle/tests/cache/*.pk
+packages/zk-shuffle/tests/cache/*.vk
+
+# Debug/output files
+.output.txt
+*.log

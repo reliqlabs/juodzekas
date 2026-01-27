@@ -1,0 +1,6 @@
+# Test cache files (very large - 180MB+)
+tests/cache/*.pk
+tests/cache/*.vk
+
+# Keep the directory
+!tests/cache/.gitkeep

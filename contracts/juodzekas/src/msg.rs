@@ -61,6 +61,13 @@ pub struct GameResponse {
     pub player: String,
     pub bet: Uint128,
     pub status: String,
-    pub player_hand: Vec<u8>,
+    pub hands: Vec<HandResponse>,
     pub dealer_hand: Vec<u8>,
+}
+
+#[cw_serde]
+pub struct HandResponse {
+    pub cards: Vec<u8>,
+    pub bet: Uint128,
+    pub status: String,
 }
