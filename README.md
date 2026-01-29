@@ -13,8 +13,23 @@ This is a Rust workspace consisting of multiple components:
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (latest stable)
+- [Rust](https://www.rust-lang.org/tools/install) (1.89.0 or later)
 - [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- C++ toolchain and GMP library (for rapidsnark native library):
+  - **Linux**:
+    ```bash
+    # Ubuntu/Debian
+    sudo apt install build-essential cmake libgmp-dev
+
+    # Fedora/RHEL
+    sudo dnf install gcc gcc-c++ cmake gmp-devel
+    ```
+  - **macOS**:
+    ```bash
+    xcode-select --install
+    brew install gmp
+    ```
+  - **Windows**: Visual Studio Build Tools with C++ support
 
 ## Getting Started
 

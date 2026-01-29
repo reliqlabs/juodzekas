@@ -181,6 +181,10 @@ impl App {
 
             if current_value == 21 {
                 self.add_log(format!("{} has 21!", hand_label));
+                // Mark as stood so it can't be played
+                if let Some(ref mut game) = self.game_state {
+                    game.hands_stood[active_spot][active_hand] = true;
+                }
                 // Recursively move to next hand/spot or dealer
                 self.move_to_next_spot_or_dealer()?;
             } else {
@@ -552,6 +556,10 @@ where
 
                                 if first_spot_value == 21 {
                                     app.add_log(format!("Game started! Spot 1/{} has Blackjack!", num_spots));
+                                    // Mark first spot as stood
+                                    if let Some(ref mut game) = app.game_state {
+                                        game.hands_stood[0][0] = true;
+                                    }
                                     if let Err(e) = app.move_to_next_spot_or_dealer() {
                                         app.add_log(format!("Error: {}", e));
                                     }

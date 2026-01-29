@@ -148,3 +148,36 @@ The optimal move according to basic strategy is highlighted in **green** in the 
     xcode-select --install
     ```
   - **Windows**: Install Visual Studio Build Tools with C++ support
+
+### Troubleshooting Build Errors
+
+If you encounter linking errors like `unable to find library -lrapidsnark, -lfr, -lfq, -lgmp`:
+
+1. **Install GMP library** (required by rapidsnark):
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install libgmp-dev
+
+   # Fedora/RHEL
+   sudo dnf install gmp-devel
+
+   # macOS
+   brew install gmp
+   ```
+
+2. **Verify rust-rapidsnark build**:
+   ```bash
+   # Clean and rebuild to ensure build scripts run
+   cargo clean
+   cargo build -p juodzekas-tui
+   ```
+
+3. **Check your platform is supported**:
+   - `rust-rapidsnark` provides prebuilt binaries for: Linux (x86_64, arm64), macOS (x86_64, aarch64)
+   - Other platforms may require building rapidsnark from source
+
+4. **If issues persist**, check the build output directory:
+   ```bash
+   ls target/debug/build/rust-rapidsnark-*/out/rapidsnark/
+   ```
+   The libraries (`librapidsnark.a`, `libfr.a`, `libfq.a`) should be present in your platform subdirectory.
