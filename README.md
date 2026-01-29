@@ -16,6 +16,22 @@ This is a Rust workspace consisting of two main components:
 
 ## Getting Started
 
+### Clone with Submodules
+
+This project uses git submodules for external dependencies (circomlib). Clone with:
+
+```bash
+git clone --recursive <repository-url>
+```
+
+Or if already cloned:
+
+```bash
+git submodule update --init --recursive
+```
+
+See [SUBMODULES.md](SUBMODULES.md) for more details.
+
 ### Smart Contract
 
 To compile and test the smart contract:
