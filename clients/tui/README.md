@@ -61,9 +61,16 @@ The TUI is organized into several sections:
 │                    │                │  • Connected to game...       │
 │                    │                │  • Shuffling deck...          │
 ├────────────────────────────────────┴───────────────────────────────┤
-│ Your Turn: [H]it, [S]tand, [D]ouble, [P]lit, [R]urrender           │
+│ Spot 1/3: [H]it or [S]tand or [D]ouble or Su[r]render              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+**Note**: The actual UI has been significantly updated from this diagram and now includes:
+- Multi-spot gameplay (1-8 hands simultaneously)
+- Split hand support with horizontal frame subdivision
+- Color-coded outcomes (green=win, red=loss, gray=push, orange=surrender)
+- Arrow key instructions in dealer window with optimal move highlighting
+- Dealer peeking for blackjack
 
 ### Components
 
@@ -75,16 +82,55 @@ The TUI is organized into several sections:
 
 ## Controls
 
+### Letter Keys
 | Key | Action |
 |-----|--------|
 | `q` | Quit the game |
+| `f` | Select Fast mode (at mode selection) |
+| `t` | Select Trustless mode (at mode selection) |
+| `1-8` | Select number of spots to play (at spot selection) |
 | `h` | Hit (Ask for another card) |
 | `s` | Stand (Keep your current hand) |
-| `d` | Double Down (Double bet, take one card) |
+| `d` | Double Down (Double bet, take one card, auto-stand) |
 | `p` | Split (Split a pair into two hands) |
-| `r` | Surrender (Forfeit half your bet) |
+| `r` | Surrender (Forfeit half your bet, lose only 50%) |
+| `n` | Next game (after game ends) |
+| `l` | Toggle log visibility |
+
+### Arrow Keys
+| Key | Action |
+|-----|--------|
+| `↑` | Hit (Ask for another card) |
+| `↓` | Stand (Keep your current hand) |
+| `→` | Double Down (when available) |
+| `←` | Split (when you have a pair) |
+
+The optimal move according to basic strategy is highlighted in **green** in the dealer window instructions.
+
+## Features
+
+### Gameplay
+- **Multi-spot Play**: Play 1-8 hands simultaneously
+- **Full Blackjack Rules**:
+  - Hit, Stand, Double Down, Split, Surrender
+  - Dealer peeks for blackjack (when showing Ace or 10)
+  - Configurable rules via `GameRules` (packages/blackjack)
+- **Basic Strategy Advisor**: Optimal moves highlighted in green based on mathematical basic strategy
+- **Visual Feedback**: Color-coded outcomes at game end (green=win, red=loss, gray=push, orange=surrender)
+
+### Technical
+- **ZK-based Card Shuffling**: Mental Poker protocol ensures trustless, verifiable card dealing
+- **Pre-shuffling**: Next game shuffles in background while you play current game (Trustless mode)
+- **Shared Game Logic**: `packages/blackjack` separates game rules from client, ready for smart contract integration
+
+### User Experience
+- **Dual Controls**: Use letter keys or arrow keys (↑=Hit, ↓=Stand, →=Double, ←=Split)
+- **Split Hand Display**: Split hands shown side-by-side within spot frames
+- **Active Hand Highlighting**: Yellow border shows which hand is currently being played
+- **Scrolling Game Log**: Track all actions and outcomes with toggle (`L` key)
 
 ## Requirements
 
-- A terminal that supports ANSI escape sequences and true color (most modern terminals).
-- Minimum terminal size: 80x24 characters.
+- A terminal that supports ANSI escape sequences and true color (most modern terminals)
+- Minimum terminal size: 80x24 characters
+- Rust toolchain for building from source

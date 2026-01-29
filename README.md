@@ -1,13 +1,15 @@
 # Juodžekas - Trustless Blackjack on Xion
 
-Juodžekas is a decentralized, trustless Blackjack game built for the Xion blockchain. It uses `zkShuffle` (Mental Poker) and Xion's native ZK module to ensure fair play and verifiable card dealing.
+Juodžekas [ˈjuːoˑd͡ʒɛkɐs] is a decentralized, trustless Blackjack game. It uses `zkShuffle` (Mental Poker) and optional smart contracts to ensure fair play and verifiable card dealing.
 
 ## Project Structure
 
-This is a Rust workspace consisting of two main components:
+This is a Rust workspace consisting of multiple components:
 
-- `contracts/juodzekas`: The CosmWasm smart contract.
-- `clients/tui`: A terminal-based user interface for playing the game.
+- `contracts/juodzekas`: The CosmWasm smart contract (WIP)
+- `clients/tui`: A terminal-based user interface for playing the game
+- `packages/zk-shuffle`: ZK-based card shuffling using Mental Poker
+- `packages/blackjack`: Shared blackjack game logic and rules
 
 ## Prerequisites
 
@@ -54,12 +56,13 @@ To run the TUI client:
 cargo run -p juodzekas-tui
 ```
 
-#### Controls
-- `q`: Quit the application
-- `h`: Hit (Request a card)
-- `s`: Stand (End your turn)
+#### Quick Start
 
-For more details on the TUI client, see [clients/tui/README.md](clients/tui/README.md).
+1. Choose game mode (Fast or Trustless)
+2. Select number of spots (1-8 hands to play simultaneously)
+3. Use arrow keys or letter keys to play
+
+For detailed controls and features, see [clients/tui/README.md](clients/tui/README.md).
 
 ## Development
 

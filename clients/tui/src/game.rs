@@ -10,133 +10,13 @@ use ark_ec::{CurveGroup, AffineRepr};
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
 
+// Re-export from blackjack package
+pub use blackjack::{Card, GameRules};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GameMode {
     Fast,      // No ZK proofs, instant gameplay
     Trustless, // Full ZK proofs, takes ~3-4 minutes to start
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Card {
-    AceSpades, TwoSpades, ThreeSpades, FourSpades, FiveSpades, SixSpades, SevenSpades,
-    EightSpades, NineSpades, TenSpades, JackSpades, QueenSpades, KingSpades,
-    AceHearts, TwoHearts, ThreeHearts, FourHearts, FiveHearts, SixHearts, SevenHearts,
-    EightHearts, NineHearts, TenHearts, JackHearts, QueenHearts, KingHearts,
-    AceDiamonds, TwoDiamonds, ThreeDiamonds, FourDiamonds, FiveDiamonds, SixDiamonds, SevenDiamonds,
-    EightDiamonds, NineDiamonds, TenDiamonds, JackDiamonds, QueenDiamonds, KingDiamonds,
-    AceClubs, TwoClubs, ThreeClubs, FourClubs, FiveClubs, SixClubs, SevenClubs,
-    EightClubs, NineClubs, TenClubs, JackClubs, QueenClubs, KingClubs,
-}
-
-impl Card {
-    pub fn to_display(&self) -> String {
-        match self {
-            Card::AceSpades => "A♠".to_string(),
-            Card::TwoSpades => "2♠".to_string(),
-            Card::ThreeSpades => "3♠".to_string(),
-            Card::FourSpades => "4♠".to_string(),
-            Card::FiveSpades => "5♠".to_string(),
-            Card::SixSpades => "6♠".to_string(),
-            Card::SevenSpades => "7♠".to_string(),
-            Card::EightSpades => "8♠".to_string(),
-            Card::NineSpades => "9♠".to_string(),
-            Card::TenSpades => "10♠".to_string(),
-            Card::JackSpades => "J♠".to_string(),
-            Card::QueenSpades => "Q♠".to_string(),
-            Card::KingSpades => "K♠".to_string(),
-            Card::AceHearts => "A♥".to_string(),
-            Card::TwoHearts => "2♥".to_string(),
-            Card::ThreeHearts => "3♥".to_string(),
-            Card::FourHearts => "4♥".to_string(),
-            Card::FiveHearts => "5♥".to_string(),
-            Card::SixHearts => "6♥".to_string(),
-            Card::SevenHearts => "7♥".to_string(),
-            Card::EightHearts => "8♥".to_string(),
-            Card::NineHearts => "9♥".to_string(),
-            Card::TenHearts => "10♥".to_string(),
-            Card::JackHearts => "J♥".to_string(),
-            Card::QueenHearts => "Q♥".to_string(),
-            Card::KingHearts => "K♥".to_string(),
-            Card::AceDiamonds => "A♦".to_string(),
-            Card::TwoDiamonds => "2♦".to_string(),
-            Card::ThreeDiamonds => "3♦".to_string(),
-            Card::FourDiamonds => "4♦".to_string(),
-            Card::FiveDiamonds => "5♦".to_string(),
-            Card::SixDiamonds => "6♦".to_string(),
-            Card::SevenDiamonds => "7♦".to_string(),
-            Card::EightDiamonds => "8♦".to_string(),
-            Card::NineDiamonds => "9♦".to_string(),
-            Card::TenDiamonds => "10♦".to_string(),
-            Card::JackDiamonds => "J♦".to_string(),
-            Card::QueenDiamonds => "Q♦".to_string(),
-            Card::KingDiamonds => "K♦".to_string(),
-            Card::AceClubs => "A♣".to_string(),
-            Card::TwoClubs => "2♣".to_string(),
-            Card::ThreeClubs => "3♣".to_string(),
-            Card::FourClubs => "4♣".to_string(),
-            Card::FiveClubs => "5♣".to_string(),
-            Card::SixClubs => "6♣".to_string(),
-            Card::SevenClubs => "7♣".to_string(),
-            Card::EightClubs => "8♣".to_string(),
-            Card::NineClubs => "9♣".to_string(),
-            Card::TenClubs => "10♣".to_string(),
-            Card::JackClubs => "J♣".to_string(),
-            Card::QueenClubs => "Q♣".to_string(),
-            Card::KingClubs => "K♣".to_string(),
-        }
-    }
-
-    pub fn value(&self) -> u8 {
-        match self {
-            Card::AceSpades | Card::AceHearts | Card::AceDiamonds | Card::AceClubs => 11,
-            Card::TwoSpades | Card::TwoHearts | Card::TwoDiamonds | Card::TwoClubs => 2,
-            Card::ThreeSpades | Card::ThreeHearts | Card::ThreeDiamonds | Card::ThreeClubs => 3,
-            Card::FourSpades | Card::FourHearts | Card::FourDiamonds | Card::FourClubs => 4,
-            Card::FiveSpades | Card::FiveHearts | Card::FiveDiamonds | Card::FiveClubs => 5,
-            Card::SixSpades | Card::SixHearts | Card::SixDiamonds | Card::SixClubs => 6,
-            Card::SevenSpades | Card::SevenHearts | Card::SevenDiamonds | Card::SevenClubs => 7,
-            Card::EightSpades | Card::EightHearts | Card::EightDiamonds | Card::EightClubs => 8,
-            Card::NineSpades | Card::NineHearts | Card::NineDiamonds | Card::NineClubs => 9,
-            _ => 10, // Ten, Jack, Queen, King
-        }
-    }
-
-    pub fn rank(&self) -> u8 {
-        match self {
-            Card::AceSpades | Card::AceHearts | Card::AceDiamonds | Card::AceClubs => 1,
-            Card::TwoSpades | Card::TwoHearts | Card::TwoDiamonds | Card::TwoClubs => 2,
-            Card::ThreeSpades | Card::ThreeHearts | Card::ThreeDiamonds | Card::ThreeClubs => 3,
-            Card::FourSpades | Card::FourHearts | Card::FourDiamonds | Card::FourClubs => 4,
-            Card::FiveSpades | Card::FiveHearts | Card::FiveDiamonds | Card::FiveClubs => 5,
-            Card::SixSpades | Card::SixHearts | Card::SixDiamonds | Card::SixClubs => 6,
-            Card::SevenSpades | Card::SevenHearts | Card::SevenDiamonds | Card::SevenClubs => 7,
-            Card::EightSpades | Card::EightHearts | Card::EightDiamonds | Card::EightClubs => 8,
-            Card::NineSpades | Card::NineHearts | Card::NineDiamonds | Card::NineClubs => 9,
-            Card::TenSpades | Card::TenHearts | Card::TenDiamonds | Card::TenClubs => 10,
-            Card::JackSpades | Card::JackHearts | Card::JackDiamonds | Card::JackClubs => 11,
-            Card::QueenSpades | Card::QueenHearts | Card::QueenDiamonds | Card::QueenClubs => 12,
-            Card::KingSpades | Card::KingHearts | Card::KingDiamonds | Card::KingClubs => 13,
-        }
-    }
-
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            0 => Card::AceSpades, 1 => Card::TwoSpades, 2 => Card::ThreeSpades, 3 => Card::FourSpades,
-            4 => Card::FiveSpades, 5 => Card::SixSpades, 6 => Card::SevenSpades, 7 => Card::EightSpades,
-            8 => Card::NineSpades, 9 => Card::TenSpades, 10 => Card::JackSpades, 11 => Card::QueenSpades,
-            12 => Card::KingSpades, 13 => Card::AceHearts, 14 => Card::TwoHearts, 15 => Card::ThreeHearts,
-            16 => Card::FourHearts, 17 => Card::FiveHearts, 18 => Card::SixHearts, 19 => Card::SevenHearts,
-            20 => Card::EightHearts, 21 => Card::NineHearts, 22 => Card::TenHearts, 23 => Card::JackHearts,
-            24 => Card::QueenHearts, 25 => Card::KingHearts, 26 => Card::AceDiamonds, 27 => Card::TwoDiamonds,
-            28 => Card::ThreeDiamonds, 29 => Card::FourDiamonds, 30 => Card::FiveDiamonds, 31 => Card::SixDiamonds,
-            32 => Card::SevenDiamonds, 33 => Card::EightDiamonds, 34 => Card::NineDiamonds, 35 => Card::TenDiamonds,
-            36 => Card::JackDiamonds, 37 => Card::QueenDiamonds, 38 => Card::KingDiamonds, 39 => Card::AceClubs,
-            40 => Card::TwoClubs, 41 => Card::ThreeClubs, 42 => Card::FourClubs, 43 => Card::FiveClubs,
-            44 => Card::SixClubs, 45 => Card::SevenClubs, 46 => Card::EightClubs, 47 => Card::NineClubs,
-            48 => Card::TenClubs, 49 => Card::JackClubs, 50 => Card::QueenClubs, 51 => Card::KingClubs,
-            _ => panic!("Invalid card index: {}", index),
-        }
-    }
 }
 
 pub struct GameState {
@@ -151,10 +31,13 @@ pub struct GameState {
     pub deck_position: usize,
     pub rng: ChaCha8Rng,
     pub mode: GameMode,
+    pub rules: GameRules, // Game rules configuration
     pub active_spot: usize, // Current spot being played (0-indexed)
     pub active_hand_in_spot: usize, // When spot is split, which hand within spot (0-indexed)
     pub hands_doubled: Vec<Vec<bool>>, // Track which hands have doubled [spot][hand_in_spot]
     pub hands_stood: Vec<Vec<bool>>, // Track which hands have stood [spot][hand_in_spot]
+    pub hands_surrendered: Vec<Vec<bool>>, // Track which hands have surrendered [spot][hand_in_spot]
+    pub dealer_peeked: bool, // Whether dealer has peeked for blackjack
 }
 
 impl GameState {
@@ -194,6 +77,7 @@ impl GameState {
         let player_hands = vec![vec![Vec::new()]; num_spots];
         let hands_doubled = vec![vec![false]; num_spots];
         let hands_stood = vec![vec![false]; num_spots];
+        let hands_surrendered = vec![vec![false]; num_spots];
 
         Ok(GameState {
             player_keys,
@@ -207,10 +91,13 @@ impl GameState {
             deck_position: 0,
             rng,
             mode,
+            rules: GameRules::default(), // Use default (Las Vegas) rules
             active_spot: 0,
             active_hand_in_spot: 0,
             hands_doubled,
             hands_stood,
+            hands_surrendered,
+            dealer_peeked: false,
         })
     }
 
@@ -348,26 +235,9 @@ impl GameState {
     }
 
     pub fn calculate_hand_value(hand: &[Option<Card>]) -> u8 {
-        let mut total = 0;
-        let mut aces = 0;
-
-        for card_opt in hand {
-            if let Some(card) = card_opt {
-                let value = card.value();
-                if value == 11 {
-                    aces += 1;
-                }
-                total += value;
-            }
-        }
-
-        // Adjust for aces
-        while total > 21 && aces > 0 {
-            total -= 10;
-            aces -= 1;
-        }
-
-        total
+        // Filter out None values and call blackjack package's calculate_hand_value
+        let cards: Vec<Card> = hand.iter().filter_map(|&c| c).collect();
+        blackjack::calculate_hand_value(&cards)
     }
 
     pub fn dealer_should_hit(&self) -> bool {
@@ -384,8 +254,10 @@ impl GameState {
         self.player_hands.resize(num_spots, vec![Vec::new()]);
         self.hands_doubled.resize(num_spots, vec![false]);
         self.hands_stood.resize(num_spots, vec![false]);
+        self.hands_surrendered.resize(num_spots, vec![false]);
         self.active_spot = 0;
         self.active_hand_in_spot = 0;
+        self.dealer_peeked = false;
 
         Ok(())
     }
@@ -452,6 +324,180 @@ impl GameState {
 
     pub fn is_current_hand_busted(&self) -> bool {
         Self::calculate_hand_value(self.get_current_hand()) > 21
+    }
+
+    pub fn dealer_has_blackjack(&self) -> bool {
+        if self.dealer_hand.len() < 2 {
+            return false;
+        }
+        Self::calculate_hand_value(&self.dealer_hand) == 21
+    }
+
+    pub fn should_dealer_peek(&self) -> bool {
+        if self.dealer_hand.is_empty() || self.dealer_peeked {
+            return false;
+        }
+        // Peek if dealer shows Ace or 10-value card
+        if let Some(Some(card)) = self.dealer_hand.get(0) {
+            let value = card.value();
+            value == 11 || value == 10
+        } else {
+            false
+        }
+    }
+
+    pub fn can_surrender(&self) -> bool {
+        // Can only surrender on first action (2 cards) before any other action
+        let spot = self.active_spot;
+        let hand_in_spot = self.active_hand_in_spot;
+        let current_hand = self.get_current_hand();
+
+        current_hand.len() == 2
+            && !self.hands_doubled[spot][hand_in_spot]
+            && !self.hands_stood[spot][hand_in_spot]
+            && !self.hands_surrendered[spot][hand_in_spot]
+            && self.player_hands[spot].len() == 1 // Can't surrender after split
+    }
+
+    pub fn surrender(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.can_surrender() {
+            return Err("Cannot surrender".into());
+        }
+
+        self.hands_surrendered[self.active_spot][self.active_hand_in_spot] = true;
+        self.hands_stood[self.active_spot][self.active_hand_in_spot] = true; // Also mark as stood to skip
+
+        Ok(())
+    }
+
+    pub fn get_optimal_move(&self) -> &'static str {
+        let hand = self.get_current_hand();
+        let player_value = Self::calculate_hand_value(hand);
+
+        // Get dealer's up card value
+        let dealer_up_card = match self.dealer_hand.get(0) {
+            Some(Some(card)) => card.value(),
+            _ => return "Stand", // No dealer card visible
+        };
+
+        // Check for soft hand (Ace counted as 11)
+        let has_ace = hand.iter().any(|c| {
+            if let Some(card) = c {
+                card.value() == 11
+            } else {
+                false
+            }
+        });
+        let is_soft = has_ace && player_value <= 21;
+
+        // Check for surrender (before split/double)
+        if self.can_surrender() {
+            // Surrender on hard 16 vs dealer 9, 10, A
+            // Surrender on hard 15 vs dealer 10
+            if !is_soft {
+                if player_value == 16 && (dealer_up_card == 9 || dealer_up_card == 10 || dealer_up_card == 11) {
+                    return "Surrender";
+                }
+                if player_value == 15 && dealer_up_card == 10 {
+                    return "Surrender";
+                }
+            }
+        }
+
+        // Check if can split
+        if self.can_split() {
+            let card_rank = if let Some(card) = &hand[0] {
+                card.rank()
+            } else {
+                return "Stand";
+            };
+
+            // Always split Aces and 8s
+            if card_rank == 1 || card_rank == 8 {
+                return "Split";
+            }
+            // Never split 10s, 5s, 4s
+            if card_rank == 10 || card_rank == 11 || card_rank == 12 || card_rank == 13 || card_rank == 5 || card_rank == 4 {
+                // Fall through to regular strategy
+            } else if card_rank == 9 {
+                // Split 9s except against 7, 10, or Ace
+                if dealer_up_card != 7 && dealer_up_card != 10 && dealer_up_card != 11 {
+                    return "Split";
+                }
+            } else if card_rank == 7 || card_rank == 6 {
+                // Split 7s and 6s against 2-7
+                if dealer_up_card >= 2 && dealer_up_card <= 7 {
+                    return "Split";
+                }
+            } else if card_rank == 3 || card_rank == 2 {
+                // Split 2s and 3s against 2-7
+                if dealer_up_card >= 2 && dealer_up_card <= 7 {
+                    return "Split";
+                }
+            }
+        }
+
+        // Check if can double
+        if self.can_double() {
+            if is_soft {
+                // Soft doubling
+                if player_value == 19 && dealer_up_card == 6 {
+                    return "Double";
+                } else if player_value == 18 && dealer_up_card >= 2 && dealer_up_card <= 6 {
+                    return "Double";
+                } else if player_value == 17 && dealer_up_card >= 3 && dealer_up_card <= 6 {
+                    return "Double";
+                } else if player_value >= 15 && player_value <= 16 && dealer_up_card >= 4 && dealer_up_card <= 6 {
+                    return "Double";
+                } else if player_value >= 13 && player_value <= 14 && dealer_up_card >= 5 && dealer_up_card <= 6 {
+                    return "Double";
+                }
+            } else {
+                // Hard doubling
+                if player_value == 11 {
+                    return "Double";
+                } else if player_value == 10 && dealer_up_card <= 9 {
+                    return "Double";
+                } else if player_value == 9 && dealer_up_card >= 3 && dealer_up_card <= 6 {
+                    return "Double";
+                }
+            }
+        }
+
+        // Basic strategy for hitting/standing
+        if is_soft {
+            // Soft hands
+            if player_value >= 19 {
+                return "Stand";
+            } else if player_value == 18 {
+                if dealer_up_card >= 9 {
+                    return "Hit";
+                } else {
+                    return "Stand";
+                }
+            } else {
+                return "Hit";
+            }
+        } else {
+            // Hard hands
+            if player_value >= 17 {
+                return "Stand";
+            } else if player_value >= 13 && player_value <= 16 {
+                if dealer_up_card >= 2 && dealer_up_card <= 6 {
+                    return "Stand";
+                } else {
+                    return "Hit";
+                }
+            } else if player_value == 12 {
+                if dealer_up_card >= 4 && dealer_up_card <= 6 {
+                    return "Stand";
+                } else {
+                    return "Hit";
+                }
+            } else {
+                return "Hit";
+            }
+        }
     }
 
     pub fn move_to_next_hand_or_spot(&mut self) -> bool {

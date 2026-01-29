@@ -3,5 +3,6 @@ members = [
     "contracts/juodzekas",
     "clients/tui",
     "packages/zk-shuffle",
+    "packages/blackjack",
 ]
 resolver = "2"

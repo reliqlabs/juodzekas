@@ -35,6 +35,7 @@ enum SpotOutcome {
     Win,
     Loss,
     Push,
+    Surrender,
 }
 
 struct App {
@@ -187,10 +188,12 @@ impl App {
                 let game = self.game_state.as_ref().unwrap();
                 let can_double = game.can_double();
                 let can_split = game.can_split();
+                let can_surrender = game.can_surrender();
 
                 let mut options = vec!["[H]it", "[S]tand"];
                 if can_double { options.push("[D]ouble"); }
                 if can_split { options.push("S[p]lit"); }
+                if can_surrender { options.push("Su[r]render"); }
 
                 self.status = format!("{}: {}", hand_label, options.join(" or "));
                 self.add_log(format!("Playing {}", hand_label));
@@ -227,12 +230,13 @@ impl App {
             if dealer_value > 21 {
                 self.add_log(format!("Dealer busts with {}!", dealer_value));
 
-                // All non-busted hands win
-                let hands_values: Vec<(usize, usize, u8)> = if let Some(ref game) = self.game_state {
+                // All non-busted, non-surrendered hands win
+                let hands_values: Vec<(usize, usize, u8, bool)> = if let Some(ref game) = self.game_state {
                     let mut values = Vec::new();
                     for (spot_idx, spot) in game.player_hands.iter().enumerate() {
                         for (hand_idx, hand) in spot.iter().enumerate() {
-                            values.push((spot_idx, hand_idx, GameState::calculate_hand_value(hand)));
+                            let surrendered = game.hands_surrendered[spot_idx][hand_idx];
+                            values.push((spot_idx, hand_idx, GameState::calculate_hand_value(hand), surrendered));
                         }
                     }
                     values
@@ -243,6 +247,7 @@ impl App {
                 self.spot_outcomes.clear();
                 let mut wins = 0;
                 let mut losses = 0;
+                let mut surrenders = 0;
 
                 // Resize spot_outcomes to match spots structure
                 if let Some(ref game) = self.game_state {
@@ -251,14 +256,18 @@ impl App {
                         .collect();
                 }
 
-                for (spot_idx, hand_idx, player_value) in hands_values {
+                for (spot_idx, hand_idx, player_value, surrendered) in hands_values {
                     let hand_label = if self.spot_outcomes[spot_idx].len() > 1 {
                         format!("Spot {}.{}", spot_idx + 1, hand_idx + 1)
                     } else {
                         format!("Spot {}", spot_idx + 1)
                     };
 
-                    let outcome = if player_value > 21 {
+                    let outcome = if surrendered {
+                        self.add_log(format!("{}: Surrendered (half loss)", hand_label));
+                        surrenders += 1;
+                        SpotOutcome::Surrender
+                    } else if player_value > 21 {
                         self.add_log(format!("{}: Bust (loss)", hand_label));
                         losses += 1;
                         SpotOutcome::Loss
@@ -270,7 +279,12 @@ impl App {
                     self.spot_outcomes[spot_idx][hand_idx] = outcome;
                 }
 
-                self.status = format!("Dealer busts! {} wins, {} losses. Press [N] for next game", wins, losses);
+                let status_msg = if surrenders > 0 {
+                    format!("Dealer busts! {} wins, {} losses, {} surrenders. Press [N] for next game", wins, losses, surrenders)
+                } else {
+                    format!("Dealer busts! {} wins, {} losses. Press [N] for next game", wins, losses)
+                };
+                self.status = status_msg;
                 self.phase = GamePhase::GameOver;
                 return Ok(());
             }
@@ -282,7 +296,8 @@ impl App {
             let mut values = Vec::new();
             for (spot_idx, spot) in game.player_hands.iter().enumerate() {
                 for (hand_idx, hand) in spot.iter().enumerate() {
-                    values.push((spot_idx, hand_idx, GameState::calculate_hand_value(hand)));
+                    let surrendered = game.hands_surrendered[spot_idx][hand_idx];
+                    values.push((spot_idx, hand_idx, GameState::calculate_hand_value(hand), surrendered));
                 }
             }
             (dealer_value, values)
@@ -295,6 +310,7 @@ impl App {
         let mut wins = 0;
         let mut losses = 0;
         let mut pushes = 0;
+        let mut surrenders = 0;
 
         // Clear previous outcomes and calculate new ones
         self.spot_outcomes.clear();
@@ -306,14 +322,18 @@ impl App {
                 .collect();
         }
 
-        for (spot_idx, hand_idx, player_value) in hands_values {
+        for (spot_idx, hand_idx, player_value, surrendered) in hands_values {
             let hand_label = if self.spot_outcomes[spot_idx].len() > 1 {
                 format!("Spot {}.{}", spot_idx + 1, hand_idx + 1)
             } else {
                 format!("Spot {}", spot_idx + 1)
             };
 
-            let outcome = if player_value > 21 {
+            let outcome = if surrendered {
+                self.add_log(format!("{}: Surrendered (half loss)", hand_label));
+                surrenders += 1;
+                SpotOutcome::Surrender
+            } else if player_value > 21 {
                 self.add_log(format!("{}: Bust (loss)", hand_label));
                 losses += 1;
                 SpotOutcome::Loss
@@ -333,7 +353,12 @@ impl App {
             self.spot_outcomes[spot_idx][hand_idx] = outcome;
         }
 
-        self.status = format!("Results: {} wins, {} losses, {} pushes. Press [N] for next game", wins, losses, pushes);
+        let status_msg = if surrenders > 0 {
+            format!("Results: {} wins, {} losses, {} pushes, {} surrenders. Press [N] for next game", wins, losses, pushes, surrenders)
+        } else {
+            format!("Results: {} wins, {} losses, {} pushes. Press [N] for next game", wins, losses, pushes)
+        };
+        self.status = status_msg;
 
         self.phase = GamePhase::GameOver;
         Ok(())
@@ -500,6 +525,25 @@ where
                                 app.init_start_time = None;
                                 app.current_init_stage.clear();
 
+                                // Check if dealer should peek for blackjack
+                                let should_peek = app.game_state.as_ref().map(|g| g.should_dealer_peek()).unwrap_or(false);
+                                if should_peek {
+                                    if let Some(ref mut game) = app.game_state {
+                                        game.dealer_peeked = true;
+                                    }
+                                    let has_blackjack = app.game_state.as_ref().map(|g| g.dealer_has_blackjack()).unwrap_or(false);
+                                    if has_blackjack {
+                                        app.add_log("Dealer peeks and has Blackjack!".to_string());
+                                        if let Err(e) = app.dealer_play() {
+                                            app.add_log(format!("Error: {}", e));
+                                        }
+                                        // Early return - game over, dealer has blackjack
+                                        return Ok(());
+                                    } else {
+                                        app.add_log("Dealer peeks - no Blackjack".to_string());
+                                    }
+                                }
+
                                 // Check if first spot has 21 and auto-advance
                                 let first_spot_value = {
                                     let game = app.game_state.as_ref().unwrap();
@@ -515,9 +559,11 @@ where
                                     let game = app.game_state.as_ref().unwrap();
                                     let can_double = game.can_double();
                                     let can_split = game.can_split();
+                                    let can_surrender = game.can_surrender();
                                     let mut options = vec!["[H]it", "[S]tand"];
                                     if can_double { options.push("[D]ouble"); }
                                     if can_split { options.push("S[p]lit"); }
+                                    if can_surrender { options.push("Su[r]render"); }
                                     app.status = format!("Spot {}/{}: {}", game.active_spot + 1, game.num_spots, options.join(" or "));
                                     app.add_log(format!("Game started! Playing spot 1/{}", game.num_spots));
                                 }
@@ -622,6 +668,44 @@ where
                         }
                     }
                 }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    if matches!(app.phase, GamePhase::PlayerTurn) {
+                        let (surrender_result, spot, hand, num_hands) = if let Some(ref mut game) = app.game_state {
+                            if game.can_surrender() {
+                                let spot = game.active_spot;
+                                let hand = game.active_hand_in_spot;
+                                let num_hands = game.player_hands[spot].len();
+                                let result = game.surrender();
+                                (Some(result), spot + 1, hand + 1, num_hands)
+                            } else {
+                                (None, 0, 0, 1)
+                            }
+                        } else {
+                            (None, 0, 0, 1)
+                        };
+
+                        if let Some(result) = surrender_result {
+                            match result {
+                                Ok(_) => {
+                                    let hand_label = if num_hands > 1 {
+                                        format!("Spot {}.{}", spot, hand)
+                                    } else {
+                                        format!("Spot {}", spot)
+                                    };
+                                    app.add_log(format!("{} surrenders!", hand_label));
+                                    if let Err(e) = app.move_to_next_spot_or_dealer() {
+                                        app.add_log(format!("Error: {}", e));
+                                    }
+                                }
+                                Err(e) => {
+                                    app.add_log(format!("Error: {}", e));
+                                }
+                            }
+                        } else {
+                            app.add_log("Cannot surrender".to_string());
+                        }
+                    }
+                }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
                     if app.phase == GamePhase::GameOver {
                         // Check if next game is ready
@@ -656,11 +740,34 @@ where
                                         app.phase = GamePhase::PlayerTurn;
                                         app.spot_outcomes.clear(); // Clear previous outcomes
 
+                                        // Check if dealer should peek for blackjack
+                                        let should_peek = app.game_state.as_ref().map(|g| g.should_dealer_peek()).unwrap_or(false);
+                                        if should_peek {
+                                            if let Some(ref mut game) = app.game_state {
+                                                game.dealer_peeked = true;
+                                            }
+                                            let has_blackjack = app.game_state.as_ref().map(|g| g.dealer_has_blackjack()).unwrap_or(false);
+                                            if has_blackjack {
+                                                app.add_log("Dealer peeks and has Blackjack!".to_string());
+                                                if let Err(e) = app.dealer_play() {
+                                                    app.add_log(format!("Error: {}", e));
+                                                }
+                                                // Early return - game over, dealer has blackjack
+                                                return Ok(());
+                                            } else {
+                                                app.add_log("Dealer peeks - no Blackjack".to_string());
+                                            }
+                                        }
+
                                         // Build status message with available options
                                         let game = app.game_state.as_ref().unwrap();
                                         let can_double = game.can_double();
+                                        let can_split = game.can_split();
+                                        let can_surrender = game.can_surrender();
                                         let mut options = vec!["[H]it", "[S]tand"];
                                         if can_double { options.push("[D]ouble"); }
+                                        if can_split { options.push("S[p]lit"); }
+                                        if can_surrender { options.push("Su[r]render"); }
                                         app.status = format!("Spot {}/{}: {}", game.active_spot + 1, game.num_spots, options.join(" or "));
 
                                         app.add_log(format!("Game started! Playing spot 1/{}", game.num_spots));
@@ -762,8 +869,10 @@ where
                             match result {
                                 Ok(_) => {
                                     app.add_log(format!("Spot {} splits!", spot));
+                                    let can_surrender = app.game_state.as_ref().map(|g| g.can_surrender()).unwrap_or(false);
                                     let mut options = vec!["[H]it", "[S]tand"];
                                     if can_double { options.push("[D]ouble"); }
+                                    if can_surrender { options.push("Su[r]render"); }
                                     app.status = format!("Spot {}.1/2: {}", spot, options.join(" or "));
                                 }
                                 Err(e) => {
@@ -853,8 +962,10 @@ where
                             match result {
                                 Ok(_) => {
                                     app.add_log(format!("Spot {} splits!", spot));
+                                    let can_surrender = app.game_state.as_ref().map(|g| g.can_surrender()).unwrap_or(false);
                                     let mut options = vec!["[H]it", "[S]tand"];
                                     if can_double { options.push("[D]ouble"); }
+                                    if can_surrender { options.push("Su[r]render"); }
                                     app.status = format!("Spot {}.1/2: {}", spot, options.join(" or "));
                                 }
                                 Err(e) => {
@@ -942,7 +1053,7 @@ fn ui(f: &mut Frame, app: &App) {
                     Some('♠') => Color::Black,
                     _ => Color::White,
                 };
-                Span::styled(format!("{} ", card_str), Style::default().fg(color))
+                Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
             })
             .collect()
     } else {
@@ -968,23 +1079,46 @@ fn ui(f: &mut Frame, app: &App) {
         // Build instructions based on available options
         let can_double = app.game_state.as_ref().map(|g| g.can_double()).unwrap_or(false);
         let can_split = app.game_state.as_ref().map(|g| g.can_split()).unwrap_or(false);
+        let optimal_move = app.game_state.as_ref().map(|g| g.get_optimal_move()).unwrap_or("Stand");
+
+        let hit_style = if optimal_move == "Hit" {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+
+        let stand_style = if optimal_move == "Stand" {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
 
         let mut instruction_spans = vec![
-            Span::styled("↑", Style::default().fg(Color::Yellow)),
+            Span::styled("↑", hit_style),
             Span::raw(" Hit  "),
-            Span::styled("↓", Style::default().fg(Color::Yellow)),
+            Span::styled("↓", stand_style),
             Span::raw(" Stand"),
         ];
 
         if can_double {
+            let double_style = if optimal_move == "Double" {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
             instruction_spans.push(Span::raw("  "));
-            instruction_spans.push(Span::styled("→", Style::default().fg(Color::Yellow)));
+            instruction_spans.push(Span::styled("→", double_style));
             instruction_spans.push(Span::raw(" Double"));
         }
 
         if can_split {
+            let split_style = if optimal_move == "Split" {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
             instruction_spans.push(Span::raw("  "));
-            instruction_spans.push(Span::styled("←", Style::default().fg(Color::Yellow)));
+            instruction_spans.push(Span::styled("←", split_style));
             instruction_spans.push(Span::raw(" Split"));
         }
 
@@ -1048,7 +1182,7 @@ fn ui(f: &mut Frame, app: &App) {
                                 Some('♠') => Color::Black,
                                 _ => Color::White,
                             };
-                            Span::styled(format!("{} ", card_str), Style::default().fg(color))
+                            Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
                         })
                         .collect();
 
@@ -1062,6 +1196,7 @@ fn ui(f: &mut Frame, app: &App) {
                             SpotOutcome::Win => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                             SpotOutcome::Loss => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                             SpotOutcome::Push => Style::default().fg(Color::DarkGray),
+                            SpotOutcome::Surrender => Style::default().fg(Color::from_u32(0xFF_A5_00)), // Orange
                         }
                     } else {
                         Style::default()
@@ -1113,7 +1248,7 @@ fn ui(f: &mut Frame, app: &App) {
                             Some('♠') => Color::Black,
                             _ => Color::White,
                         };
-                        Span::styled(format!("{} ", card_str), Style::default().fg(color))
+                        Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
                     })
                     .collect();
 
@@ -1127,6 +1262,7 @@ fn ui(f: &mut Frame, app: &App) {
                         SpotOutcome::Win => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                         SpotOutcome::Loss => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                         SpotOutcome::Push => Style::default().fg(Color::DarkGray),
+                        SpotOutcome::Surrender => Style::default().fg(Color::from_u32(0xFF_A5_00)), // Orange
                     }
                 } else {
                     Style::default()
