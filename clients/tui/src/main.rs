@@ -631,6 +631,7 @@ where
                         app.selected_mode = Some(GameMode::Fast);
                         app.phase = GamePhase::SpotSelection;
                         app.add_log("FAST mode selected".to_string());
+                        app.add_log("Initializing deck in background...".to_string());
                         app.status = "Select number of spots (1-8):".to_string();
                     }
                 }
@@ -639,6 +640,7 @@ where
                         app.selected_mode = Some(GameMode::Trustless);
                         app.phase = GamePhase::SpotSelection;
                         app.add_log("TRUSTLESS mode selected".to_string());
+                        app.add_log("Loading proving/verifying keys in background...".to_string());
                         app.status = "Select number of spots (1-8):".to_string();
                     }
                 }
@@ -649,9 +651,6 @@ where
                         app.phase = GamePhase::Initializing;
                         app.loading_dots = 0;
                         app.add_log(format!("Starting game with {} spot(s)", num_spots));
-                        if app.selected_mode == Some(GameMode::Trustless) {
-                            app.add_log("Loading proving/verifying keys...".to_string());
-                        }
                     }
                 }
                 KeyCode::Char('h') | KeyCode::Char('H') => {
@@ -1053,7 +1052,7 @@ fn ui(f: &mut Frame, app: &App) {
                     Some('♠') => Color::Black,
                     _ => Color::White,
                 };
-                Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
+                Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
             })
             .collect()
     } else {
@@ -1182,7 +1181,7 @@ fn ui(f: &mut Frame, app: &App) {
                                 Some('♠') => Color::Black,
                                 _ => Color::White,
                             };
-                            Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
+                            Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
                         })
                         .collect();
 
@@ -1248,7 +1247,7 @@ fn ui(f: &mut Frame, app: &App) {
                             Some('♠') => Color::Black,
                             _ => Color::White,
                         };
-                        Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::White))
+                        Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
                     })
                     .collect();
 

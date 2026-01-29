@@ -133,4 +133,18 @@ The optimal move according to basic strategy is highlighted in **green** in the 
 
 - A terminal that supports ANSI escape sequences and true color (most modern terminals)
 - Minimum terminal size: 80x24 characters
-- Rust toolchain for building from source
+- Rust toolchain 1.89.0 or later
+- C++ toolchain (required by rapidsnark native library):
+  - **Linux**: Install `build-essential` or `gcc`, `g++`, `cmake`
+    ```bash
+    # Ubuntu/Debian
+    sudo apt install build-essential cmake
+
+    # Fedora/RHEL
+    sudo dnf install gcc gcc-c++ cmake
+    ```
+  - **macOS**: Install Xcode Command Line Tools
+    ```bash
+    xcode-select --install
+    ```
+  - **Windows**: Install Visual Studio Build Tools with C++ support

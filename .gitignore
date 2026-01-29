@@ -5,6 +5,10 @@ Cargo.lock
 # IDEs
 .idea/
 .vscode/
+.junie/
+
+# AI instructions
+CLAUDE.md
 
 # CosmWasm
 artifacts/
