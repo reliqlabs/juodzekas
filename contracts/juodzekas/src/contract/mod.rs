@@ -2,8 +2,8 @@ pub mod instantiate;
 pub mod execute;
 pub mod query;
 
-#[cfg(test)]
-mod tests;
+// Unit tests removed - use integration tests in tests/integration.rs instead
+// since MockQuerier doesn't support gRPC queries needed for ZK verification
 
 pub use crate::contract::instantiate::instantiate;
 pub use crate::contract::execute::execute;
