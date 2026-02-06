@@ -1,5 +1,6 @@
 use cosmwasm_std::{Binary, DepsMut, Env, MessageInfo, Response, StdError, Uint128};
 use crate::error::ContractError;
+use crate::game_logic::{config_to_rules, to_blackjack_state};
 use crate::msg::ExecuteMsg;
 use crate::state::{GameSession, GameStatus, Hand, HandStatus, CONFIG, GAMES};
 use crate::zk::xion_zk_verify;
@@ -11,12 +12,12 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::JoinGame { bet, public_key } => execute_join_game(deps, info, bet, public_key),
+        ExecuteMsg::JoinGame { bet, public_key } => execute_join_game(deps, _env, info, bet, public_key),
         ExecuteMsg::SubmitShuffle {
             shuffled_deck,
             proof,
         } => execute_submit_shuffle(deps, info, shuffled_deck, proof),
-        ExecuteMsg::Hit {} => execute_hit(deps, info),
+        ExecuteMsg::Hit {} => execute_hit(deps, _env, info),
         ExecuteMsg::Stand {} => execute_stand(deps, info),
         ExecuteMsg::DoubleDown {} => execute_double_down(deps, info),
         ExecuteMsg::Split {} => execute_split(deps, info),
@@ -26,11 +27,13 @@ pub fn execute(
             partial_decryption,
             proof,
         } => execute_submit_reveal(deps, info, card_index, partial_decryption, proof),
+        ExecuteMsg::ClaimTimeout {} => execute_claim_timeout(deps, _env, info),
     }
 }
 
 pub fn execute_join_game(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     bet: Uint128,
     public_key: Binary,
@@ -57,6 +60,8 @@ pub fn execute_join_game(
         current_hand_index: 0,
         dealer_hand: vec![],
         status: GameStatus::WaitingForShuffle,
+        current_turn: crate::state::TurnOwner::None,
+        last_action_timestamp: env.block.time.seconds(),
         last_card_index: 0,
     };
 
@@ -101,11 +106,14 @@ pub fn execute_submit_shuffle(
         .add_attribute("player", info.sender))
 }
 
-pub fn execute_hit(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
+pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     let mut game = GAMES.load(deps.storage, &info.sender)?;
     if game.status != GameStatus::PlayerTurn {
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
+
+    game.current_turn = crate::state::TurnOwner::Player;
+    game.last_action_timestamp = env.block.time.seconds();
 
     let hand = &game.hands[game.current_hand_index as usize];
     if hand.status != HandStatus::Active {
@@ -166,27 +174,15 @@ pub fn execute_double_down(deps: DepsMut, info: MessageInfo) -> Result<Response,
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
 
-    // Double down is only allowed on the initial 2 cards
-    let hand = &mut game.hands[game.current_hand_index as usize];
-    if hand.cards.len() != 2 {
-        return Err(ContractError::Std(StdError::msg("Double down only allowed on initial hand")));
-    }
-
-    let p_score = crate::contract::calculate_score(&hand.cards);
-    let allowed = match config.double_down_restriction {
-        crate::state::DoubleDownRestriction::Any => true,
-        crate::state::DoubleDownRestriction::Hard9_10_11 => p_score >= 9 && p_score <= 11,
-        crate::state::DoubleDownRestriction::Hard10_11 => p_score >= 10 && p_score <= 11,
-    };
-
-    if !allowed {
-        return Err(ContractError::Std(StdError::msg(format!(
-            "Double down not allowed for total {p_score} with restriction {:?}",
-            config.double_down_restriction
-        ))));
+    // Use blackjack package to validate all double rules (including restriction)
+    let rules = config_to_rules(&config);
+    let bj_state = to_blackjack_state(&game, rules);
+    if !bj_state.can_double_current_hand() {
+        return Err(ContractError::Std(StdError::msg("Double down not allowed")));
     }
 
     // Double the bet
+    let hand = &mut game.hands[game.current_hand_index as usize];
     hand.bet = hand.bet.checked_mul(Uint128::new(2)).map_err(|e| StdError::msg(e.to_string()))?;
     hand.status = HandStatus::Doubled;
 
@@ -211,19 +207,18 @@ pub fn execute_surrender(deps: DepsMut, info: MessageInfo) -> Result<Response, C
     let mut game = GAMES.load(deps.storage, &info.sender)?;
     let config = CONFIG.load(deps.storage)?;
 
-    if !config.surrender_allowed {
-        return Err(ContractError::Std(StdError::msg("Surrender not allowed")));
-    }
-
     if game.status != GameStatus::PlayerTurn {
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
 
-    // Surrender is only allowed on the initial 2 cards
-    let hand = &mut game.hands[game.current_hand_index as usize];
-    if hand.cards.len() != 2 {
-        return Err(ContractError::Std(StdError::msg("Surrender only allowed on initial hand")));
+    // Use blackjack package to validate if surrender is allowed
+    let rules = config_to_rules(&config);
+    let bj_state = to_blackjack_state(&game, rules);
+    if !bj_state.can_surrender_current_hand() {
+        return Err(ContractError::Std(StdError::msg("Surrender not allowed")));
     }
+
+    let hand = &mut game.hands[game.current_hand_index as usize];
 
     // Settlement: return half the bet
     let refund_amount = hand.bet.checked_div(Uint128::new(2)).map_err(|e| StdError::msg(e.to_string()))?;
@@ -248,22 +243,16 @@ pub fn execute_split(deps: DepsMut, info: MessageInfo) -> Result<Response, Contr
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
 
-    if game.hands.len() >= config.max_splits as usize + 1 {
-        return Err(ContractError::Std(StdError::msg("Max splits reached")));
+    // Use blackjack package to validate if split is allowed
+    let rules = config_to_rules(&config);
+    let bj_state = to_blackjack_state(&game, rules);
+    if !bj_state.can_split_current_hand() {
+        return Err(ContractError::Std(StdError::msg("Split not allowed")));
     }
 
     let hand_index = game.current_hand_index as usize;
     let (card0, card1) = {
         let hand = &game.hands[hand_index];
-        if hand.cards.len() != 2 {
-            return Err(ContractError::Std(StdError::msg("Split only allowed on initial hand")));
-        }
-        if (hand.cards[0] % 13) != (hand.cards[1] % 13) {
-            return Err(ContractError::Std(StdError::msg("Cards must be a pair to split")));
-        }
-        if (hand.cards[0] % 13) == 0 && !config.can_split_aces {
-            return Err(ContractError::Std(StdError::msg("Splitting Aces not allowed")));
-        }
         (hand.cards[0], hand.cards[1])
     };
 
@@ -550,4 +539,66 @@ pub fn execute_submit_reveal(
         .add_attribute("action", "submit_reveal")
         .add_attribute("card_index", card_index.to_string())
         .add_attribute("card_value", card_value.to_string()))
+}
+
+pub fn execute_claim_timeout(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response, ContractError> {
+    let game = GAMES.load(deps.storage, &info.sender)?;
+
+    // Define timeout threshold (e.g., 5 minutes = 300 seconds)
+    const TIMEOUT_SECONDS: u64 = 300;
+
+    let current_time = env.block.time.seconds();
+    let time_elapsed = current_time.saturating_sub(game.last_action_timestamp);
+
+    if time_elapsed < TIMEOUT_SECONDS {
+        return Err(ContractError::Std(StdError::msg(format!(
+            "Timeout not reached. Elapsed: {}s, Required: {}s",
+            time_elapsed, TIMEOUT_SECONDS
+        ))));
+    }
+
+    // Determine who wins based on whose turn it was
+    let (refund_amount, winner) = match game.current_turn {
+        crate::state::TurnOwner::Player => {
+            // Player failed to act, dealer wins
+            (Uint128::zero(), "Dealer")
+        }
+        crate::state::TurnOwner::Dealer => {
+            // Dealer failed to act, player wins all bets
+            let total_bet: Uint128 = game.hands.iter().map(|h| h.bet).sum();
+            let payout = total_bet.checked_mul(Uint128::new(2))
+                .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+            (payout, "Player")
+        }
+        crate::state::TurnOwner::None => {
+            return Err(ContractError::Std(StdError::msg(
+                "No active turn to timeout",
+            )));
+        }
+    };
+
+    // Remove game from storage
+    GAMES.remove(deps.storage, &info.sender);
+
+    // Build response with refund if player wins
+    let mut response = Response::new()
+        .add_attribute("action", "claim_timeout")
+        .add_attribute("winner", winner)
+        .add_attribute("elapsed_seconds", time_elapsed.to_string());
+
+    if refund_amount > Uint128::zero() {
+        response = response.add_message(cosmwasm_std::BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: vec![cosmwasm_std::Coin {
+                denom: "uatom".to_string(), // Replace with actual denom
+                amount: refund_amount.into(),
+            }],
+        });
+    }
+
+    Ok(response)
 }

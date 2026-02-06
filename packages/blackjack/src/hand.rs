@@ -55,6 +55,7 @@ pub fn can_split_cards(card1: &Card, card2: &Card) -> bool {
     card1.rank() == card2.rank()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hand {
     pub cards: Vec<Card>,
     pub doubled: bool,
@@ -100,5 +101,148 @@ impl Hand {
 impl Default for Hand {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_hand_value_simple() {
+        let cards = vec![Card::TwoHearts, Card::ThreeSpades];
+        assert_eq!(calculate_hand_value(&cards), 5);
+    }
+
+    #[test]
+    fn test_calculate_hand_value_with_face_cards() {
+        let cards = vec![Card::KingHearts, Card::QueenSpades];
+        assert_eq!(calculate_hand_value(&cards), 20);
+    }
+
+    #[test]
+    fn test_calculate_hand_value_blackjack() {
+        let cards = vec![Card::AceHearts, Card::KingSpades];
+        assert_eq!(calculate_hand_value(&cards), 21);
+    }
+
+    #[test]
+    fn test_calculate_hand_value_soft_ace() {
+        let cards = vec![Card::AceHearts, Card::SixSpades];
+        assert_eq!(calculate_hand_value(&cards), 17); // Ace as 11
+    }
+
+    #[test]
+    fn test_calculate_hand_value_hard_ace() {
+        let cards = vec![Card::AceHearts, Card::SixSpades, Card::NineClubs];
+        assert_eq!(calculate_hand_value(&cards), 16); // Ace as 1
+    }
+
+    #[test]
+    fn test_calculate_hand_value_multiple_aces() {
+        let cards = vec![Card::AceHearts, Card::AceSpades, Card::NineClubs];
+        assert_eq!(calculate_hand_value(&cards), 21); // One ace as 11, one as 1
+    }
+
+    #[test]
+    fn test_is_busted() {
+        let cards = vec![Card::KingHearts, Card::QueenSpades, Card::FiveClubs];
+        assert!(is_busted(&cards));
+    }
+
+    #[test]
+    fn test_not_busted() {
+        let cards = vec![Card::KingHearts, Card::QueenSpades];
+        assert!(!is_busted(&cards));
+    }
+
+    #[test]
+    fn test_is_blackjack() {
+        let cards = vec![Card::AceHearts, Card::KingSpades];
+        assert!(is_blackjack(&cards));
+    }
+
+    #[test]
+    fn test_not_blackjack_three_cards() {
+        let cards = vec![Card::SevenHearts, Card::SevenSpades, Card::SevenClubs];
+        assert!(!is_blackjack(&cards));
+    }
+
+    #[test]
+    fn test_not_blackjack_wrong_value() {
+        let cards = vec![Card::KingHearts, Card::QueenSpades];
+        assert!(!is_blackjack(&cards));
+    }
+
+    #[test]
+    fn test_is_soft_hand() {
+        let cards = vec![Card::AceHearts, Card::SixSpades];
+        assert!(is_soft_hand(&cards));
+    }
+
+    #[test]
+    fn test_not_soft_hand_hard_ace() {
+        let cards = vec![Card::AceHearts, Card::SixSpades, Card::NineClubs];
+        assert!(!is_soft_hand(&cards));
+    }
+
+    #[test]
+    fn test_not_soft_hand_no_ace() {
+        let cards = vec![Card::KingHearts, Card::QueenSpades];
+        assert!(!is_soft_hand(&cards));
+    }
+
+    #[test]
+    fn test_can_split_cards_same_rank() {
+        let card1 = Card::EightHearts;
+        let card2 = Card::EightSpades;
+        assert!(can_split_cards(&card1, &card2));
+    }
+
+    #[test]
+    fn test_can_split_cards_different_rank() {
+        let card1 = Card::EightHearts;
+        let card2 = Card::NineSpades;
+        assert!(!can_split_cards(&card1, &card2));
+    }
+
+    #[test]
+    fn test_can_split_cards_face_cards() {
+        let card1 = Card::KingHearts;
+        let card2 = Card::QueenSpades;
+        assert!(!can_split_cards(&card1, &card2)); // Different ranks
+    }
+
+    #[test]
+    fn test_hand_struct_value() {
+        let mut hand = Hand::new();
+        hand.add_card(Card::KingHearts);
+        hand.add_card(Card::SevenSpades);
+        assert_eq!(hand.value(), 17);
+    }
+
+    #[test]
+    fn test_hand_struct_is_blackjack() {
+        let mut hand = Hand::new();
+        hand.add_card(Card::AceHearts);
+        hand.add_card(Card::KingSpades);
+        assert!(hand.is_blackjack());
+    }
+
+    #[test]
+    fn test_hand_struct_can_split() {
+        let mut hand = Hand::new();
+        hand.add_card(Card::EightHearts);
+        hand.add_card(Card::EightSpades);
+        assert!(hand.can_split());
+    }
+
+    #[test]
+    fn test_hand_struct_cannot_split_three_cards() {
+        let mut hand = Hand::new();
+        hand.add_card(Card::EightHearts);
+        hand.add_card(Card::EightSpades);
+        hand.add_card(Card::TwoClubs);
+        assert!(!hand.can_split());
     }
 }

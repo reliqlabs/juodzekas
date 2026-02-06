@@ -2,7 +2,7 @@ use super::*;
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env};
 use cosmwasm_std::{coins, from_json, Addr, Binary, Uint128};
 use crate::msg::{ExecuteMsg, GameResponse, InstantiateMsg, QueryMsg};
-use crate::state::Config;
+use crate::state::{Config, PayoutRatio};
 
 #[test]
 fn test_calculate_score() {
@@ -30,12 +30,12 @@ fn test_full_game_flow() {
     let inst_msg = InstantiateMsg {
         min_bet: Uint128::new(100),
         max_bet: Uint128::new(10000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 3,
         can_split_aces: true,
         can_hit_split_aces: false,
@@ -175,12 +175,12 @@ fn test_bet_limits() {
     let inst_msg = InstantiateMsg {
         min_bet: Uint128::new(100),
         max_bet: Uint128::new(1000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 3,
         can_split_aces: true,
         can_hit_split_aces: false,
@@ -224,12 +224,12 @@ fn test_dealer_soft_17() {
         let inst_msg = InstantiateMsg {
             min_bet: Uint128::new(10),
             max_bet: Uint128::new(1000),
-            bj_payout_permille: 1500,
-            insurance_payout_permille: 2000,
-            standard_payout_permille: 1000,
+            blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+            insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+            standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
             dealer_hits_soft_17: true, // HIT ON SOFT 17
             dealer_peeks: true,
-            double_down_restriction: crate::state::DoubleDownRestriction::Any,
+            double_restriction: crate::state::DoubleRestriction::Any,
             max_splits: 3,
             can_split_aces: true,
             can_hit_split_aces: false,
@@ -268,12 +268,12 @@ fn test_dealer_soft_17() {
         let inst_msg = InstantiateMsg {
             min_bet: Uint128::new(10),
             max_bet: Uint128::new(1000),
-            bj_payout_permille: 1500,
-            insurance_payout_permille: 2000,
-            standard_payout_permille: 1000,
+            blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+            insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+            standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
             dealer_hits_soft_17: false, // STAND ON SOFT 17
             dealer_peeks: true,
-            double_down_restriction: crate::state::DoubleDownRestriction::Any,
+            double_restriction: crate::state::DoubleRestriction::Any,
             max_splits: 3,
             can_split_aces: true,
             can_hit_split_aces: false,
@@ -309,15 +309,15 @@ fn test_dealer_soft_17() {
 }
 
 #[test]
-fn test_double_down_restrictions() {
-    use crate::state::DoubleDownRestriction;
+fn test_double_restrictions() {
+    use crate::state::DoubleRestriction;
 
     let restrictions = vec![
-        (DoubleDownRestriction::Any, 5, true),        // Any: 5 is allowed
-        (DoubleDownRestriction::Hard9_10_11, 8, false), // Hard 9-11: 8 is NOT allowed
-        (DoubleDownRestriction::Hard9_10_11, 9, true),  // Hard 9-11: 9 IS allowed
-        (DoubleDownRestriction::Hard10_11, 9, false),   // Hard 10-11: 9 is NOT allowed
-        (DoubleDownRestriction::Hard10_11, 10, true),   // Hard 10-11: 10 IS allowed
+        (DoubleRestriction::Any, 5, true),        // Any: 5 is allowed
+        (DoubleRestriction::Hard9_10_11, 8, false), // Hard 9-11: 8 is NOT allowed
+        (DoubleRestriction::Hard9_10_11, 9, true),  // Hard 9-11: 9 IS allowed
+        (DoubleRestriction::Hard10_11, 9, false),   // Hard 10-11: 9 is NOT allowed
+        (DoubleRestriction::Hard10_11, 10, true),   // Hard 10-11: 10 IS allowed
     ];
 
     for (restriction, player_total, should_allow) in restrictions {
@@ -325,12 +325,12 @@ fn test_double_down_restrictions() {
         let inst_msg = InstantiateMsg {
             min_bet: Uint128::new(10),
             max_bet: Uint128::new(1000),
-            bj_payout_permille: 1500,
-            insurance_payout_permille: 2000,
-            standard_payout_permille: 1000,
+            blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+            insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+            standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
             dealer_hits_soft_17: true,
             dealer_peeks: true,
-            double_down_restriction: restriction,
+            double_restriction: restriction,
             max_splits: 3,
             can_split_aces: true,
             can_hit_split_aces: false,
@@ -374,12 +374,12 @@ fn test_blackjack_payout() {
     let inst_msg = InstantiateMsg {
         min_bet: Uint128::new(10),
         max_bet: Uint128::new(1000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 3,
         can_split_aces: true,
         can_hit_split_aces: false,
@@ -425,12 +425,12 @@ fn test_surrender() {
     let inst_msg = InstantiateMsg {
         min_bet: Uint128::new(10),
         max_bet: Uint128::new(1000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 3,
         can_split_aces: true,
         can_hit_split_aces: false,
@@ -465,12 +465,12 @@ fn proper_initialization() {
     let msg = InstantiateMsg {
         min_bet: Uint128::new(100),
         max_bet: Uint128::new(10000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 3,
         can_split_aces: true,
         can_hit_split_aces: false,
@@ -495,12 +495,12 @@ fn test_split() {
     let inst_msg = InstantiateMsg {
         min_bet: Uint128::new(10),
         max_bet: Uint128::new(1000),
-        bj_payout_permille: 1500,
-        insurance_payout_permille: 2000,
-        standard_payout_permille: 1000,
+        blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
         dealer_hits_soft_17: true,
         dealer_peeks: true,
-        double_down_restriction: crate::state::DoubleDownRestriction::Any,
+        double_restriction: crate::state::DoubleRestriction::Any,
         max_splits: 1,
         can_split_aces: true,
         can_hit_split_aces: false,

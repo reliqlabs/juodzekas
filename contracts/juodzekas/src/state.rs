@@ -3,15 +3,37 @@ use cosmwasm_std::{Addr, Binary, Uint128};
 use cw_storage_plus::{Item, Map};
 
 #[cw_serde]
+pub struct PayoutRatio {
+    pub numerator: u16,
+    pub denominator: u16,
+}
+
+impl PayoutRatio {
+    pub fn calculate_payout(&self, bet: Uint128) -> Uint128 {
+        bet.checked_mul(Uint128::new(self.numerator as u128))
+            .unwrap_or(bet)
+            .checked_div(Uint128::new(self.denominator as u128))
+            .unwrap_or(bet)
+    }
+}
+
+#[cw_serde]
+pub enum DoubleRestriction {
+    Any,
+    Hard9_10_11,
+    Hard10_11,
+}
+
+#[cw_serde]
 pub struct Config {
     pub min_bet: Uint128,
     pub max_bet: Uint128,
-    pub bj_payout_permille: u64,       // e.g., 1500 for 1.5x (3:2)
-    pub insurance_payout_permille: u64, // e.g., 2000 for 2x
-    pub standard_payout_permille: u64,  // e.g., 1000 for 1x
+    pub blackjack_payout: PayoutRatio,     // e.g., 3:2 or 6:5
+    pub insurance_payout: PayoutRatio,     // e.g., 2:1
+    pub standard_payout: PayoutRatio,      // e.g., 1:1
     pub dealer_hits_soft_17: bool,
     pub dealer_peeks: bool,
-    pub double_down_restriction: DoubleDownRestriction,
+    pub double_restriction: DoubleRestriction,
     pub max_splits: u32,
     pub can_split_aces: bool,
     pub can_hit_split_aces: bool,
@@ -21,10 +43,10 @@ pub struct Config {
 }
 
 #[cw_serde]
-pub enum DoubleDownRestriction {
-    Any,
-    Hard9_10_11,
-    Hard10_11,
+pub enum TurnOwner {
+    Player,
+    Dealer,
+    None,
 }
 
 #[cw_serde]
@@ -52,6 +74,8 @@ pub struct GameSession {
     pub current_hand_index: u32,
     pub dealer_hand: Vec<u8>,
     pub status: GameStatus,
+    pub current_turn: TurnOwner,
+    pub last_action_timestamp: u64, // Timestamp of last action for timeout tracking
     pub last_card_index: u32,
 }
 

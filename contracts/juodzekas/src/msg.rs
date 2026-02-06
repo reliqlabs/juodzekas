@@ -1,18 +1,18 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
 
-use crate::state::{Config, DoubleDownRestriction};
+use crate::state::{Config, DoubleRestriction, PayoutRatio};
 
 #[cw_serde]
 pub struct InstantiateMsg {
     pub min_bet: Uint128,
     pub max_bet: Uint128,
-    pub bj_payout_permille: u64,
-    pub insurance_payout_permille: u64,
-    pub standard_payout_permille: u64,
+    pub blackjack_payout: PayoutRatio,
+    pub insurance_payout: PayoutRatio,
+    pub standard_payout: PayoutRatio,
     pub dealer_hits_soft_17: bool,
     pub dealer_peeks: bool,
-    pub double_down_restriction: DoubleDownRestriction,
+    pub double_restriction: DoubleRestriction,
     pub max_splits: u32,
     pub can_split_aces: bool,
     pub can_hit_split_aces: bool,
@@ -24,7 +24,7 @@ pub struct InstantiateMsg {
 #[cw_serde]
 pub enum ExecuteMsg {
     // Phase 1: Join and provide public key
-    JoinGame { 
+    JoinGame {
         bet: Uint128,
         public_key: Binary,
     },
@@ -45,6 +45,8 @@ pub enum ExecuteMsg {
         partial_decryption: Binary,
         proof: Binary,
     },
+    // Timeout claim: if opponent doesn't act, claim funds
+    ClaimTimeout {},
 }
 
 #[cw_serde]

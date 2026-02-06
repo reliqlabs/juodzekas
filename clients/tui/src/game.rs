@@ -17,6 +17,7 @@ pub use blackjack::{Card, GameRules};
 pub enum GameMode {
     Fast,      // No ZK proofs, instant gameplay
     Trustless, // Full ZK proofs, takes ~3-4 minutes to start
+    Contract,  // Full ZK proofs + on-chain smart contract
 }
 
 pub struct GameState {
@@ -241,8 +242,8 @@ impl GameState {
     }
 
     pub fn dealer_should_hit(&self) -> bool {
-        let dealer_value = Self::calculate_hand_value(&self.dealer_hand);
-        dealer_value < 17
+        // Use blackjack package logic which respects soft 17 rules
+        self.should_dealer_hit()
     }
 
     pub fn resize_for_spots(&mut self, num_spots: usize) -> Result<(), Box<dyn std::error::Error>> {
@@ -267,29 +268,13 @@ impl GameState {
     }
 
     pub fn can_double(&self) -> bool {
-        // Can only double on first action (2 cards) for current hand
-        let current_hand = self.get_current_hand();
-        current_hand.len() == 2 && !self.hands_doubled[self.active_spot][self.active_hand_in_spot]
+        // Use blackjack package logic which respects double after split rules
+        self.can_double_current_hand()
     }
 
     pub fn can_split(&self) -> bool {
-        // Can only split if current hand has exactly 2 cards of same rank
-        // and spot hasn't been split already (only allow one split per spot)
-        let spot_hands = &self.player_hands[self.active_spot];
-        if spot_hands.len() > 1 {
-            return false; // Already split
-        }
-
-        let current_hand = self.get_current_hand();
-        if current_hand.len() != 2 {
-            return false;
-        }
-
-        if let (Some(card1), Some(card2)) = (&current_hand[0], &current_hand[1]) {
-            card1.rank() == card2.rank()
-        } else {
-            false
-        }
+        // Use blackjack package logic which respects max splits and resplit aces rules
+        self.can_split_current_hand()
     }
 
     pub fn split(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -326,37 +311,12 @@ impl GameState {
         Self::calculate_hand_value(self.get_current_hand()) > 21
     }
 
-    pub fn dealer_has_blackjack(&self) -> bool {
-        if self.dealer_hand.len() < 2 {
-            return false;
-        }
-        Self::calculate_hand_value(&self.dealer_hand) == 21
-    }
-
-    pub fn should_dealer_peek(&self) -> bool {
-        if self.dealer_hand.is_empty() || self.dealer_peeked {
-            return false;
-        }
-        // Peek if dealer shows Ace or 10-value card
-        if let Some(Some(card)) = self.dealer_hand.get(0) {
-            let value = card.value();
-            value == 11 || value == 10
-        } else {
-            false
-        }
-    }
+    // These methods now delegate to game_logic.rs which uses blackjack package
+    // Kept here for backwards compatibility with existing TUI code
 
     pub fn can_surrender(&self) -> bool {
-        // Can only surrender on first action (2 cards) before any other action
-        let spot = self.active_spot;
-        let hand_in_spot = self.active_hand_in_spot;
-        let current_hand = self.get_current_hand();
-
-        current_hand.len() == 2
-            && !self.hands_doubled[spot][hand_in_spot]
-            && !self.hands_stood[spot][hand_in_spot]
-            && !self.hands_surrendered[spot][hand_in_spot]
-            && self.player_hands[spot].len() == 1 // Can't surrender after split
+        // Use blackjack package logic which respects surrender rules and late surrender
+        self.can_surrender_current_hand()
     }
 
     pub fn surrender(&mut self) -> Result<(), Box<dyn std::error::Error>> {

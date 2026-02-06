@@ -17,8 +17,16 @@ use std::sync::{Arc, Mutex};
 mod game;
 use game::{GameState, GameMode};
 
+mod game_logic;
+
+mod contract_msg;
+
 mod tui_logger;
 use tui_logger::TuiLogger;
+
+// TODO: Re-enable once mob library API is stable
+// mod wallet;
+// use wallet::Wallet;
 
 #[derive(PartialEq)]
 enum GamePhase {
@@ -62,12 +70,13 @@ impl App {
             phase: GamePhase::ModeSelection,
             selected_mode: None,
             selected_spots: None,
-            status: "Select mode: [F]ast (instant) or [T]rustless (~1 min, with ZK proofs)".to_string(),
+            status: "Select mode: [F]ast (instant), [T]rustless (~1 min, ZK proofs), or [C]ontract (on-chain)".to_string(),
             logs: vec![
                 "Welcome to Juodžekas!".to_string(),
                 "Choose your game mode:".to_string(),
                 "[F] Fast - Instant gameplay, no proofs".to_string(),
                 "[T] Trustless - Full ZK proofs, ~1 min setup".to_string(),
+                "[C] Contract - On-chain with smart contract (coming soon)".to_string(),
             ],
             log_buffer,
             loading_dots: 0,
@@ -652,6 +661,14 @@ where
                         app.status = "Select number of spots (1-8):".to_string();
                     }
                 }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    if matches!(app.phase, GamePhase::ModeSelection | GamePhase::GameOver) {
+                        app.add_log("CONTRACT mode not yet implemented".to_string());
+                        app.add_log("This will enable on-chain gameplay with smart contracts".to_string());
+                        app.add_log("Coming soon! Press F or T to play locally".to_string());
+                        // For now, don't change phase - let user select another mode
+                    }
+                }
                 KeyCode::Char('1'..='8') => {
                     if app.phase == GamePhase::SpotSelection {
                         let num_spots = key.code.to_string().parse::<usize>().unwrap();
@@ -1011,6 +1028,7 @@ fn ui(f: &mut Frame, app: &App) {
         match mode {
             GameMode::Fast => "Juodžekas - Fast Mode (No Proofs)".to_string(),
             GameMode::Trustless => "Juodžekas - Trustless Mode (ZK Proofs)".to_string(),
+            GameMode::Contract => "Juodžekas - Contract Mode (On-Chain)".to_string(),
         }
     } else {
         "Juodžekas - Trustless Blackjack".to_string()

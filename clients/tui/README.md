@@ -181,3 +181,29 @@ If you encounter linking errors like `unable to find library -lrapidsnark, -lfr,
    ls target/debug/build/rust-rapidsnark-*/out/rapidsnark/
    ```
    The libraries (`librapidsnark.a`, `libfr.a`, `libfq.a`) should be present in your platform subdirectory.
+
+#### Undefined Symbol: __rust_probestack
+
+If you encounter `error: undefined symbol: __rust_probestack`:
+
+```bash
+# This is a known issue with certain Rust/LLVM combinations on Linux
+# Solution: Update to latest Rust stable
+rustup update stable
+cargo clean
+cargo build -p juodzekas-tui
+```
+
+If that doesn't work, try switching linker:
+```bash
+# Add to .cargo/config.toml in the project root:
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+```
+
+Or use the GNU linker instead:
+```bash
+# Remove the -fuse-ld=lld flag if it's causing issues
+RUSTFLAGS="-C linker=gcc" cargo build -p juodzekas-tui
+```
