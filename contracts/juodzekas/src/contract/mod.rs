@@ -1,6 +1,7 @@
 pub mod instantiate;
 pub mod execute;
 pub mod query;
+pub mod reveal;
 
 // Unit tests removed - use integration tests in tests/integration.rs instead
 // since MockQuerier doesn't support gRPC queries needed for ZK verification

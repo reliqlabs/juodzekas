@@ -2,7 +2,7 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
 use cw2::set_contract_version;
 use crate::error::ContractError;
 use crate::msg::InstantiateMsg;
-use crate::state::{Config, CONFIG};
+use crate::state::{Config, CONFIG, GAME_COUNTER};
 
 const CONTRACT_NAME: &str = "crates.io:juodzekas";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -14,6 +14,7 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let config = Config {
+        denom: msg.denom.clone(),
         min_bet: msg.min_bet,
         max_bet: msg.max_bet,
         blackjack_payout: msg.blackjack_payout,
@@ -31,9 +32,11 @@ pub fn instantiate(
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG.save(deps.storage, &config)?;
+    GAME_COUNTER.save(deps.storage, &0u64)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
+        .add_attribute("denom", msg.denom)
         .add_attribute("min_bet", msg.min_bet)
         .add_attribute("max_bet", msg.max_bet))
 }

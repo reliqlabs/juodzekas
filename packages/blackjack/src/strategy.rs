@@ -24,8 +24,8 @@ pub fn optimal_move(
     let is_soft = is_soft_hand(player_cards);
 
     // Check for surrender (before split/double)
-    if can_surrender && rules.allow_surrender {
-        if !is_soft {
+    if can_surrender && rules.allow_surrender
+        && !is_soft {
             if player_value == 16 && (dealer_value == 9 || dealer_value == 10 || dealer_value == 11) {
                 return OptimalMove::Surrender;
             }
@@ -33,7 +33,6 @@ pub fn optimal_move(
                 return OptimalMove::Surrender;
             }
         }
-    }
 
     // Check if can split
     if can_split && player_cards.len() == 2 && can_split_cards(&player_cards[0], &player_cards[1]) {
@@ -53,12 +52,12 @@ pub fn optimal_move(
             }
         } else if card_rank == 7 || card_rank == 6 {
             // Split 7s and 6s against 2-7
-            if dealer_value >= 2 && dealer_value <= 7 {
+            if (2..=7).contains(&dealer_value) {
                 return OptimalMove::Split;
             }
         } else if card_rank == 3 || card_rank == 2 {
             // Split 2s and 3s against 2-7
-            if dealer_value >= 2 && dealer_value <= 7 {
+            if (2..=7).contains(&dealer_value) {
                 return OptimalMove::Split;
             }
         }
@@ -68,24 +67,20 @@ pub fn optimal_move(
     if can_double {
         if is_soft {
             // Soft doubling
-            if player_value == 19 && dealer_value == 6 {
-                return OptimalMove::Double;
-            } else if player_value == 18 && dealer_value >= 2 && dealer_value <= 6 {
-                return OptimalMove::Double;
-            } else if player_value == 17 && dealer_value >= 3 && dealer_value <= 6 {
-                return OptimalMove::Double;
-            } else if player_value >= 15 && player_value <= 16 && dealer_value >= 4 && dealer_value <= 6 {
-                return OptimalMove::Double;
-            } else if player_value >= 13 && player_value <= 14 && dealer_value >= 5 && dealer_value <= 6 {
+            if (player_value == 19 && dealer_value == 6)
+                || (player_value == 18 && (2..=6).contains(&dealer_value))
+                || (player_value == 17 && (3..=6).contains(&dealer_value))
+                || ((15..=16).contains(&player_value) && (4..=6).contains(&dealer_value))
+                || ((13..=14).contains(&player_value) && (5..=6).contains(&dealer_value))
+            {
                 return OptimalMove::Double;
             }
         } else {
             // Hard doubling
-            if player_value == 11 {
-                return OptimalMove::Double;
-            } else if player_value == 10 && dealer_value <= 9 {
-                return OptimalMove::Double;
-            } else if player_value == 9 && dealer_value >= 3 && dealer_value <= 6 {
+            if player_value == 11
+                || (player_value == 10 && dealer_value <= 9)
+                || (player_value == 9 && (3..=6).contains(&dealer_value))
+            {
                 return OptimalMove::Double;
             }
         }
@@ -109,14 +104,14 @@ pub fn optimal_move(
         // Hard hands
         if player_value >= 17 {
             OptimalMove::Stand
-        } else if player_value >= 13 && player_value <= 16 {
-            if dealer_value >= 2 && dealer_value <= 6 {
+        } else if (13..=16).contains(&player_value) {
+            if (2..=6).contains(&dealer_value) {
                 OptimalMove::Stand
             } else {
                 OptimalMove::Hit
             }
         } else if player_value == 12 {
-            if dealer_value >= 4 && dealer_value <= 6 {
+            if (4..=6).contains(&dealer_value) {
                 OptimalMove::Stand
             } else {
                 OptimalMove::Hit

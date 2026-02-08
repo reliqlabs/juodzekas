@@ -33,6 +33,6 @@ pub fn encrypt(pk: &Point, m: &Point, r: &Fr) -> Ciphertext {
 pub fn decrypt(sk: &Fr, c: &Ciphertext) -> Point {
     // m = c1 - sk * c0
     let sk_c0 = (c.c0.into_group() * *sk).into_affine();
-    let m = (c.c1.into_group() - sk_c0.into_group()).into_affine();
-    m
+    
+    (c.c1.into_group() - sk_c0.into_group()).into_affine()
 }

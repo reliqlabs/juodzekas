@@ -118,7 +118,7 @@ impl Card {
             40 => Card::TwoClubs, 41 => Card::ThreeClubs, 42 => Card::FourClubs, 43 => Card::FiveClubs,
             44 => Card::SixClubs, 45 => Card::SevenClubs, 46 => Card::EightClubs, 47 => Card::NineClubs,
             48 => Card::TenClubs, 49 => Card::JackClubs, 50 => Card::QueenClubs, 51 => Card::KingClubs,
-            _ => panic!("Invalid card index: {}", index),
+            _ => panic!("Invalid card index: {index}"),
         }
     }
 }

@@ -16,7 +16,6 @@ pub fn xion_zk_verify(
         vkey_id: 0,
     };
 
-    let query_bz = query_request.to_bytes()?;
     let query_response = deps.querier.query_grpc(
         String::from("/xion.zk.v1.Query/ProofVerify"),
         Binary::new(query_request.to_bytes()?)

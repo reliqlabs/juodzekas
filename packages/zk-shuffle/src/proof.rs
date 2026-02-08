@@ -2,11 +2,9 @@ use crate::babyjubjub::Fq;
 use ark_bn254::{Bn254, Fr as Bn254Fr};
 use ark_groth16::{Groth16, Proof, VerifyingKey, ProvingKey};
 use ark_snark::{SNARK, CircuitSpecificSetupSNARK};
-use ark_relations::r1cs::{SynthesisError, ConstraintSynthesizer, ConstraintSystemRef};
 use ark_ff::{PrimeField, BigInteger};
 use ark_std::rand::{Rng, CryptoRng};
 use std::fs::File;
-use std::collections::HashMap;
 pub use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
 use memmap2::Mmap;
 use ark_circom::{CircomConfig, CircomBuilder, WitnessCalculator};
@@ -21,7 +19,7 @@ pub fn load_or_generate_keys<R: Rng + CryptoRng>(
 ) -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>), Box<dyn std::error::Error>> {
     // Try to load from cache if both files exist
     if std::path::Path::new(pk_cache_path).exists() && std::path::Path::new(vk_cache_path).exists() {
-        log::info!("Loading cached keys from {} and {}", pk_cache_path, vk_cache_path);
+        log::info!("Loading cached keys from {pk_cache_path} and {vk_cache_path}");
         match (|| -> Result<_, Box<dyn std::error::Error>> {
             let pk_file = File::open(pk_cache_path)?;
             let vk_file = File::open(vk_cache_path)?;
@@ -41,7 +39,7 @@ pub fn load_or_generate_keys<R: Rng + CryptoRng>(
                 return Ok((pk, vk));
             }
             Err(e) => {
-                log::warn!("Failed to load cached keys: {}. Regenerating...", e);
+                log::warn!("Failed to load cached keys: {e}. Regenerating...");
                 // Fall through to regenerate keys
             }
         }
@@ -64,7 +62,7 @@ pub fn load_or_generate_keys<R: Rng + CryptoRng>(
         std::fs::create_dir_all(parent)?;
     }
 
-    log::info!("Caching keys to {} and {} (uncompressed for faster loading)...", pk_cache_path, vk_cache_path);
+    log::info!("Caching keys to {pk_cache_path} and {vk_cache_path} (uncompressed for faster loading)...");
     let mut pk_file = File::create(pk_cache_path)?;
     let mut vk_file = File::create(vk_cache_path)?;
     pk.serialize_uncompressed(&mut pk_file)?;
@@ -94,14 +92,14 @@ pub unsafe fn load_keys_unsafe_mmap(
     vk_cache_path: &str,
 ) -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>), Box<dyn std::error::Error>> {
     log::info!("Loading keys using unsafe memory-mapped files (FAST mode)");
-    log::info!("Loading from {} and {}", pk_cache_path, vk_cache_path);
+    log::info!("Loading from {pk_cache_path} and {vk_cache_path}");
 
     // Check files exist
     if !std::path::Path::new(pk_cache_path).exists() {
-        return Err(format!("Proving key cache not found: {}", pk_cache_path).into());
+        return Err(format!("Proving key cache not found: {pk_cache_path}").into());
     }
     if !std::path::Path::new(vk_cache_path).exists() {
-        return Err(format!("Verifying key cache not found: {}", vk_cache_path).into());
+        return Err(format!("Verifying key cache not found: {vk_cache_path}").into());
     }
 
     let start = std::time::Instant::now();
@@ -180,39 +178,18 @@ impl ShufflePublicInputs {
     }
 
     pub fn get_input_mapping(&self) -> Vec<(String, Vec<Bn254Fr>)> {
-        let mut mapping = Vec::new();
-        mapping.push(("pk".to_string(), self.pk.to_vec()));
-        mapping.push(("UX0".to_string(), self.ux0.clone()));
-        mapping.push(("UX1".to_string(), self.ux1.clone()));
-        mapping.push(("VX0".to_string(), self.vx0.clone()));
-        mapping.push(("VX1".to_string(), self.vx1.clone()));
-        mapping.push(("s_u".to_string(), self.s_u.to_vec()));
-        mapping.push(("s_v".to_string(), self.s_v.to_vec()));
-        mapping
+        vec![
+            ("pk".to_string(), self.pk.to_vec()),
+            ("UX0".to_string(), self.ux0.clone()),
+            ("UX1".to_string(), self.ux1.clone()),
+            ("VX0".to_string(), self.vx0.clone()),
+            ("VX1".to_string(), self.vx1.clone()),
+            ("s_u".to_string(), self.s_u.to_vec()),
+            ("s_v".to_string(), self.s_v.to_vec()),
+        ]
     }
 }
 
-/// Helper struct to convert witness to ConstraintSynthesizer
-struct WitnessCircuit {
-    witness: Vec<Bn254Fr>,
-}
-
-impl ConstraintSynthesizer<Bn254Fr> for WitnessCircuit {
-    fn generate_constraints(
-        self,
-        cs: ConstraintSystemRef<Bn254Fr>,
-    ) -> Result<(), SynthesisError> {
-        // Allocate all witness values as input variables
-        for (i, w) in self.witness.iter().enumerate() {
-            if i == 0 {
-                // First element is always 1 (the constant)
-                continue;
-            }
-            cs.new_witness_variable(|| Ok(*w))?;
-        }
-        Ok(())
-    }
-}
 
 /// Rapidsnark proof structure matching snarkjs output
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -347,9 +324,9 @@ pub fn generate_shuffle_proof_rapidsnark(
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Could not find shuffle_encrypt.zkey in any expected location")?;
 
-    log::info!("Using zkey: {}", zkey_path);
+    log::info!("Using zkey: {zkey_path}");
     let rapidsnark_result = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
-        .map_err(|e| format!("Rapidsnark proof generation failed: {}", e))?;
+        .map_err(|e| format!("Rapidsnark proof generation failed: {e}"))?;
 
     log::info!("Rapidsnark proof generated successfully");
 
@@ -445,7 +422,7 @@ pub fn generate_reveal_proof_rapidsnark(
         .ok_or("Could not find decrypt.zkey in any expected location")?;
 
     let rapidsnark_result = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
-        .map_err(|e| format!("Rapidsnark reveal proof generation failed: {}", e))?;
+        .map_err(|e| format!("Rapidsnark reveal proof generation failed: {e}"))?;
 
     log::info!("Rapidsnark reveal proof generated successfully");
 

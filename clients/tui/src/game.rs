@@ -222,12 +222,12 @@ impl GameState {
         } else {
             let spot = spot_index.unwrap_or(0);
             if spot >= self.num_spots {
-                return Err(format!("Invalid spot index: {}", spot).into());
+                return Err(format!("Invalid spot index: {spot}").into());
             }
             // Add to the active hand within the spot
             let hand_index = self.active_hand_in_spot;
             if hand_index >= self.player_hands[spot].len() {
-                return Err(format!("Invalid hand index: {}", hand_index).into());
+                return Err(format!("Invalid hand index: {hand_index}").into());
             }
             self.player_hands[spot][hand_index].push(Some(card));
         }
@@ -307,9 +307,6 @@ impl GameState {
         Ok(())
     }
 
-    pub fn is_current_hand_busted(&self) -> bool {
-        Self::calculate_hand_value(self.get_current_hand()) > 21
-    }
 
     // These methods now delegate to game_logic.rs which uses blackjack package
     // Kept here for backwards compatibility with existing TUI code
@@ -335,7 +332,7 @@ impl GameState {
         let player_value = Self::calculate_hand_value(hand);
 
         // Get dealer's up card value
-        let dealer_up_card = match self.dealer_hand.get(0) {
+        let dealer_up_card = match self.dealer_hand.first() {
             Some(Some(card)) => card.value(),
             _ => return "Stand", // No dealer card visible
         };
@@ -386,12 +383,12 @@ impl GameState {
                 }
             } else if card_rank == 7 || card_rank == 6 {
                 // Split 7s and 6s against 2-7
-                if dealer_up_card >= 2 && dealer_up_card <= 7 {
+                if (2..=7).contains(&dealer_up_card) {
                     return "Split";
                 }
             } else if card_rank == 3 || card_rank == 2 {
                 // Split 2s and 3s against 2-7
-                if dealer_up_card >= 2 && dealer_up_card <= 7 {
+                if (2..=7).contains(&dealer_up_card) {
                     return "Split";
                 }
             }
@@ -401,24 +398,20 @@ impl GameState {
         if self.can_double() {
             if is_soft {
                 // Soft doubling
-                if player_value == 19 && dealer_up_card == 6 {
-                    return "Double";
-                } else if player_value == 18 && dealer_up_card >= 2 && dealer_up_card <= 6 {
-                    return "Double";
-                } else if player_value == 17 && dealer_up_card >= 3 && dealer_up_card <= 6 {
-                    return "Double";
-                } else if player_value >= 15 && player_value <= 16 && dealer_up_card >= 4 && dealer_up_card <= 6 {
-                    return "Double";
-                } else if player_value >= 13 && player_value <= 14 && dealer_up_card >= 5 && dealer_up_card <= 6 {
+                if (player_value == 19 && dealer_up_card == 6)
+                    || (player_value == 18 && (2..=6).contains(&dealer_up_card))
+                    || (player_value == 17 && (3..=6).contains(&dealer_up_card))
+                    || ((15..=16).contains(&player_value) && (4..=6).contains(&dealer_up_card))
+                    || ((13..=14).contains(&player_value) && (5..=6).contains(&dealer_up_card))
+                {
                     return "Double";
                 }
             } else {
                 // Hard doubling
-                if player_value == 11 {
-                    return "Double";
-                } else if player_value == 10 && dealer_up_card <= 9 {
-                    return "Double";
-                } else if player_value == 9 && dealer_up_card >= 3 && dealer_up_card <= 6 {
+                if player_value == 11
+                    || (player_value == 10 && dealer_up_card <= 9)
+                    || (player_value == 9 && (3..=6).contains(&dealer_up_card))
+                {
                     return "Double";
                 }
             }
@@ -428,34 +421,34 @@ impl GameState {
         if is_soft {
             // Soft hands
             if player_value >= 19 {
-                return "Stand";
+                "Stand"
             } else if player_value == 18 {
                 if dealer_up_card >= 9 {
-                    return "Hit";
+                    "Hit"
                 } else {
-                    return "Stand";
+                    "Stand"
                 }
             } else {
-                return "Hit";
+                "Hit"
             }
         } else {
             // Hard hands
             if player_value >= 17 {
-                return "Stand";
-            } else if player_value >= 13 && player_value <= 16 {
-                if dealer_up_card >= 2 && dealer_up_card <= 6 {
-                    return "Stand";
+                "Stand"
+            } else if (13..=16).contains(&player_value) {
+                if (2..=6).contains(&dealer_up_card) {
+                    "Stand"
                 } else {
-                    return "Hit";
+                    "Hit"
                 }
             } else if player_value == 12 {
-                if dealer_up_card >= 4 && dealer_up_card <= 6 {
-                    return "Stand";
+                if (4..=6).contains(&dealer_up_card) {
+                    "Stand"
                 } else {
-                    return "Hit";
+                    "Hit"
                 }
             } else {
-                return "Hit";
+                "Hit"
             }
         }
     }

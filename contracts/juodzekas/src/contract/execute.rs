@@ -1,8 +1,8 @@
-use cosmwasm_std::{Binary, DepsMut, Env, MessageInfo, Response, StdError, Uint128};
+use cosmwasm_std::{Addr, Binary, DepsMut, Env, MessageInfo, Response, StdError, Uint128};
 use crate::error::ContractError;
 use crate::game_logic::{config_to_rules, to_blackjack_state};
 use crate::msg::ExecuteMsg;
-use crate::state::{GameSession, GameStatus, Hand, HandStatus, CONFIG, GAMES};
+use crate::state::{GameSession, GameStatus, Hand, HandStatus, TurnOwner, CONFIG, GAMES, GAME_COUNTER};
 use crate::zk::xion_zk_verify;
 
 pub fn execute(
@@ -12,33 +12,117 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::JoinGame { bet, public_key } => execute_join_game(deps, _env, info, bet, public_key),
-        ExecuteMsg::SubmitShuffle {
+        ExecuteMsg::CreateGame {
+            public_key,
             shuffled_deck,
             proof,
-        } => execute_submit_shuffle(deps, info, shuffled_deck, proof),
-        ExecuteMsg::Hit {} => execute_hit(deps, _env, info),
-        ExecuteMsg::Stand {} => execute_stand(deps, info),
-        ExecuteMsg::DoubleDown {} => execute_double_down(deps, info),
-        ExecuteMsg::Split {} => execute_split(deps, info),
-        ExecuteMsg::Surrender {} => execute_surrender(deps, info),
+            public_inputs,
+        } => execute_create_game(deps, _env, info, public_key, shuffled_deck, proof, public_inputs),
+        ExecuteMsg::JoinGame {
+            game_id,
+            bet,
+            public_key,
+            shuffled_deck,
+            proof,
+            public_inputs,
+        } => execute_join_game(deps, _env, info, game_id, bet, public_key, shuffled_deck, proof, public_inputs),
+        ExecuteMsg::Hit { game_id } => execute_hit(deps, _env, info, game_id),
+        ExecuteMsg::Stand { game_id } => execute_stand(deps, info, game_id),
+        ExecuteMsg::DoubleDown { game_id } => execute_double_down(deps, info, game_id),
+        ExecuteMsg::Split { game_id } => execute_split(deps, info, game_id),
+        ExecuteMsg::Surrender { game_id } => execute_surrender(deps, info, game_id),
         ExecuteMsg::SubmitReveal {
+            game_id,
             card_index,
             partial_decryption,
             proof,
-        } => execute_submit_reveal(deps, info, card_index, partial_decryption, proof),
-        ExecuteMsg::ClaimTimeout {} => execute_claim_timeout(deps, _env, info),
+            public_inputs,
+        } => execute_submit_reveal(deps, _env, info, game_id, card_index, partial_decryption, proof, public_inputs),
+        ExecuteMsg::ClaimTimeout { game_id } => execute_claim_timeout(deps, _env, info, game_id),
     }
 }
 
+pub fn execute_create_game(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    public_key: Binary,
+    shuffled_deck: Vec<Binary>,
+    proof: Binary,
+    public_inputs: Vec<String>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // Verify dealer's shuffle proof
+    let verified = xion_zk_verify(deps.as_ref(), &config.shuffle_vk_id, proof, public_inputs)?;
+    if !verified {
+        return Err(ContractError::Std(StdError::msg("Invalid dealer shuffle proof")));
+    }
+
+    // Dealer must deposit bankroll (e.g., 10x max bet to cover player wins)
+    let required_bankroll = config.max_bet.checked_mul(Uint128::new(10))
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+
+    let deposited = info.funds.iter()
+        .find(|c| c.denom == config.denom)
+        .map(|c| c.amount)
+        .unwrap_or(cosmwasm_std::Uint256::zero());
+
+    let required_bankroll_u256 = cosmwasm_std::Uint256::from(required_bankroll);
+    if deposited < required_bankroll_u256 {
+        return Err(ContractError::Std(StdError::msg(format!(
+            "Insufficient bankroll. Required: {required_bankroll_u256}, Got: {deposited}"
+        ))));
+    }
+
+    // Generate new game ID
+    let game_id = GAME_COUNTER.load(deps.storage)?;
+    GAME_COUNTER.save(deps.storage, &(game_id + 1))?;
+
+    // Create game session waiting for player
+    let game = GameSession {
+        player: Addr::unchecked("pending"), // Placeholder until player joins
+        dealer: info.sender.clone(),
+        bet: Uint128::zero(),
+        player_pubkey: Binary::default(),
+        dealer_pubkey: public_key,
+        deck: vec![],
+        player_shuffled_deck: Some(shuffled_deck), // Dealer's initial shuffle
+        hands: vec![],
+        current_hand_index: 0,
+        dealer_hand: vec![],
+        status: GameStatus::WaitingForPlayerJoin,
+        current_turn: TurnOwner::None,
+        last_action_timestamp: env.block.time.seconds(),
+        last_card_index: 0,
+        pending_reveals: vec![],
+    };
+
+    // Store game by ID
+    GAMES.save(deps.storage, game_id, &game)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "create_game")
+        .add_attribute("game_id", game_id.to_string())
+        .add_attribute("dealer", info.sender)
+        .add_attribute("bankroll", deposited))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn execute_join_game(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
+    game_id: u64,
     bet: Uint128,
     public_key: Binary,
+    shuffled_deck: Vec<Binary>,
+    proof: Binary,
+    public_inputs: Vec<String>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
+
+    // Validate bet
     if bet < config.min_bet {
         return Err(ContractError::Std(StdError::msg("Bet too low")));
     }
@@ -46,68 +130,70 @@ pub fn execute_join_game(
         return Err(ContractError::Std(StdError::msg("Bet too high")));
     }
 
-    let game = GameSession {
-        player: info.sender.clone(),
-        bet,
-        player_pubkey: public_key,
-        dealer_pubkey: Binary::default(),
-        deck: vec![],
-        hands: vec![Hand {
-            cards: vec![],
-            bet,
-            status: HandStatus::Active,
-        }],
-        current_hand_index: 0,
-        dealer_hand: vec![],
-        status: GameStatus::WaitingForShuffle,
-        current_turn: crate::state::TurnOwner::None,
-        last_action_timestamp: env.block.time.seconds(),
-        last_card_index: 0,
-    };
+    // Load game by ID
+    let mut game = GAMES.load(deps.storage, game_id)?;
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    // Verify game is waiting for player
+    if game.status != GameStatus::WaitingForPlayerJoin {
+        return Err(ContractError::Std(StdError::msg("Game not available for joining")));
+    }
+
+    // Verify player's re-shuffle proof
+    let verified = xion_zk_verify(deps.as_ref(), &config.shuffle_vk_id, proof, public_inputs)?;
+    if !verified {
+        return Err(ContractError::Std(StdError::msg("Invalid player shuffle proof")));
+    }
+
+    // Player must deposit bet in correct denom
+    let deposited = info.funds.iter()
+        .find(|c| c.denom == config.denom)
+        .map(|c| c.amount)
+        .unwrap_or(cosmwasm_std::Uint256::zero());
+
+    let bet_u256 = cosmwasm_std::Uint256::from(bet);
+    if deposited < bet_u256 {
+        return Err(ContractError::Std(StdError::msg(format!(
+            "Insufficient bet. Required: {bet_u256}, Got: {deposited}"
+        ))));
+    }
+
+    // Update game with player info
+    game.player = info.sender.clone();
+    game.bet = bet;
+    game.player_pubkey = public_key;
+    game.deck = shuffled_deck; // Player's re-shuffle becomes final deck
+    game.hands = vec![Hand {
+        cards: vec![],
+        bet,
+        status: HandStatus::Active,
+    }];
+    game.status = GameStatus::WaitingForReveal {
+        reveal_requests: vec![0, 1, 2], // First 3 cards: player card 1, player card 2, dealer upcard
+        next_status: Box::new(GameStatus::PlayerTurn),
+    };
+    game.last_card_index = 4; // Cards 0-3 are dealt (player gets 0,1 and dealer gets 2,3)
+    game.last_action_timestamp = env.block.time.seconds();
+
+    // Save updated game
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "join_game")
-        .add_attribute("player", info.sender))
+        .add_attribute("game_id", game_id.to_string())
+        .add_attribute("player", info.sender)
+        .add_attribute("dealer", game.dealer)
+        .add_attribute("bet", bet))
 }
 
-pub fn execute_submit_shuffle(
-    deps: DepsMut,
-    info: MessageInfo,
-    shuffled_deck: Vec<Binary>,
-    proof: Binary,
-) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
-    let config = CONFIG.load(deps.storage)?;
 
-    if game.status != GameStatus::WaitingForShuffle {
-        return Err(ContractError::Std(StdError::msg("Invalid game status")));
+pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+    let mut game = GAMES.load(deps.storage, game_id)?;
+
+    // Verify sender is player
+    if game.player != info.sender {
+        return Err(ContractError::Std(StdError::msg("Not authorized")));
     }
 
-    let public_inputs = vec![];
-    let verified = xion_zk_verify(deps.as_ref(), &config.shuffle_vk_id, proof, public_inputs)?;
-
-    if !verified {
-        return Err(ContractError::Std(StdError::msg("Invalid shuffle proof")));
-    }
-
-    game.deck = shuffled_deck;
-    game.status = GameStatus::WaitingForReveal {
-        reveal_requests: vec![0, 1, 2],
-        next_status: Box::new(GameStatus::PlayerTurn),
-    };
-    game.last_card_index = 4;
-
-    GAMES.save(deps.storage, &info.sender, &game)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "submit_shuffle")
-        .add_attribute("player", info.sender))
-}
-
-pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
     if game.status != GameStatus::PlayerTurn {
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
@@ -127,17 +213,18 @@ pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
         next_status: Box::new(GameStatus::PlayerTurn),
     };
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "hit")
+        .add_attribute("game_id", game_id.to_string())
         .add_attribute("player", info.sender)
         .add_attribute("requested_card", card_to_reveal.to_string())
         .add_attribute("hand_index", game.current_hand_index.to_string()))
 }
 
-pub fn execute_stand(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
+pub fn execute_stand(deps: DepsMut, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+    let mut game = GAMES.load(deps.storage, game_id)?;
     if game.status != GameStatus::PlayerTurn {
         return Err(ContractError::Std(StdError::msg("Not player turn")));
     }
@@ -158,7 +245,7 @@ pub fn execute_stand(deps: DepsMut, info: MessageInfo) -> Result<Response, Contr
         };
     }
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "stand")
@@ -166,8 +253,8 @@ pub fn execute_stand(deps: DepsMut, info: MessageInfo) -> Result<Response, Contr
         .add_attribute("hand_index", game.current_hand_index.to_string()))
 }
 
-pub fn execute_double_down(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
+pub fn execute_double_down(deps: DepsMut, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+    let mut game = GAMES.load(deps.storage, game_id)?;
     let config = CONFIG.load(deps.storage)?;
 
     if game.status != GameStatus::PlayerTurn {
@@ -194,7 +281,7 @@ pub fn execute_double_down(deps: DepsMut, info: MessageInfo) -> Result<Response,
         next_status: Box::new(GameStatus::DealerTurn), // Force stand after one card
     };
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "double_down")
@@ -203,8 +290,8 @@ pub fn execute_double_down(deps: DepsMut, info: MessageInfo) -> Result<Response,
         .add_attribute("requested_card", card_to_reveal.to_string()))
 }
 
-pub fn execute_surrender(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
+pub fn execute_surrender(deps: DepsMut, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+    let mut game = GAMES.load(deps.storage, game_id)?;
     let config = CONFIG.load(deps.storage)?;
 
     if game.status != GameStatus::PlayerTurn {
@@ -227,7 +314,7 @@ pub fn execute_surrender(deps: DepsMut, info: MessageInfo) -> Result<Response, C
         winner: "Surrendered".to_string(),
     };
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "surrender")
@@ -235,8 +322,8 @@ pub fn execute_surrender(deps: DepsMut, info: MessageInfo) -> Result<Response, C
         .add_attribute("refund_amount", refund_amount))
 }
 
-pub fn execute_split(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
+pub fn execute_split(deps: DepsMut, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+    let mut game = GAMES.load(deps.storage, game_id)?;
     let config = CONFIG.load(deps.storage)?;
 
     if game.status != GameStatus::PlayerTurn {
@@ -276,7 +363,7 @@ pub fn execute_split(deps: DepsMut, info: MessageInfo) -> Result<Response, Contr
         next_status: Box::new(GameStatus::PlayerTurn),
     };
 
-    GAMES.save(deps.storage, &info.sender, &game)?;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     Ok(Response::new()
         .add_attribute("action", "split")
@@ -284,269 +371,12 @@ pub fn execute_split(deps: DepsMut, info: MessageInfo) -> Result<Response, Contr
         .add_attribute("requested_cards", format!("{card_to_reveal_1}, {card_to_reveal_2}")))
 }
 
-pub fn execute_submit_reveal(
-    deps: DepsMut,
-    info: MessageInfo,
-    card_index: u32,
-    partial_decryption: Binary,
-    proof: Binary,
-) -> Result<Response, ContractError> {
-    let mut game = GAMES.load(deps.storage, &info.sender)?;
+// Import from reveal module
+use super::reveal::execute_submit_reveal;
+
+pub fn execute_claim_timeout(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
-
-    let (mut reveal_requests, next_status) = match game.status {
-        GameStatus::WaitingForReveal {
-            reveal_requests,
-            next_status,
-        } => (reveal_requests, next_status),
-        _ => {
-            return Err(ContractError::Std(StdError::msg(format!(
-                "No pending reveal. Current status: {:?}",
-                game.status
-            ))))
-        }
-    };
-
-    if !reveal_requests.contains(&card_index) {
-        return Err(ContractError::Std(StdError::msg(format!(
-            "Invalid card reveal index: {card_index}. Expected one of: {reveal_requests:?}"
-        ))));
-    }
-
-    let public_inputs = vec![
-        card_index.to_string(),
-        hex::encode(partial_decryption.as_slice()),
-    ];
-    let verified = xion_zk_verify(deps.as_ref(), &config.reveal_vk_id, proof, public_inputs)?;
-
-    if !verified {
-        return Err(ContractError::Std(StdError::msg("Invalid reveal proof")));
-    }
-
-    let card_value = partial_decryption.as_slice()[0] % 52;
-
-    if card_index < 2 {
-        game.hands[0].cards.push(card_value);
-    } else if card_index == 2 || card_index == 3 {
-        game.dealer_hand.push(card_value);
-    } else {
-        if let GameStatus::PlayerTurn = *next_status {
-            // If it's PlayerTurn, we need to know which hand to add the card to.
-            // During a Split, we might have multiple cards being revealed.
-            // Simplified: add to the first hand that has fewer than 2 cards, 
-            // OR if all have 2+, add to the current hand.
-            // BUT during a Split reveal, card_to_reveal_1 was for hand current_hand_index
-            // and card_to_reveal_2 was for the newly added hand.
-            
-            // For now, let's assume if it's PlayerTurn, it's for the current hand 
-            // UNLESS it's a split reveal.
-            // Actually, we can just use the game.current_hand_index for simple Hit/DoubleDown.
-            // For Split, we need to be more careful.
-            
-            // Let's find the hand that "needs" a card.
-            // In a simple Hit, it's the current hand.
-            // In a Split, it's more complex.
-            
-            // A better way: track which card belongs to which hand in the reveal request.
-            // But for now, let's just use current_hand_index.
-            // If it's a split, card_index might be > 3.
-            
-            let mut hand_found = false;
-            for hand in &mut game.hands {
-                if hand.cards.len() < 2 {
-                    hand.cards.push(card_value);
-                    hand_found = true;
-                    break;
-                }
-            }
-            if !hand_found {
-                game.hands[game.current_hand_index as usize].cards.push(card_value);
-            }
-        } else {
-            game.dealer_hand.push(card_value);
-        }
-    }
-
-    reveal_requests.retain(|&i| i != card_index);
-
-    if reveal_requests.is_empty() {
-        game.status = match *next_status {
-            GameStatus::PlayerTurn => {
-                let hand_index = game.current_hand_index as usize;
-                let p_score = crate::contract::calculate_score(&game.hands[hand_index].cards);
-                
-                if p_score > 21 {
-                    game.hands[hand_index].status = HandStatus::Busted;
-                    // Move to next hand or DealerTurn
-                    if hand_index + 1 < game.hands.len() {
-                        game.current_hand_index += 1;
-                        GameStatus::PlayerTurn
-                    } else {
-                        GameStatus::WaitingForReveal {
-                            reveal_requests: vec![3],
-                            next_status: Box::new(GameStatus::DealerTurn),
-                        }
-                    }
-                } else if p_score == 21 && game.hands[hand_index].cards.len() == 2 {
-                    // Blackjack!
-                    game.hands[hand_index].status = HandStatus::Stood;
-                    if hand_index + 1 < game.hands.len() {
-                        game.current_hand_index += 1;
-                        GameStatus::PlayerTurn
-                    } else {
-                        // If it's the last hand and it's Blackjack, we still need to reveal dealer's hole card
-                        GameStatus::WaitingForReveal {
-                            reveal_requests: vec![3],
-                            next_status: Box::new(GameStatus::DealerTurn),
-                        }
-                    }
-                } else if p_score == 21 {
-                    // 21 but not Blackjack (e.g. after a split or hit)
-                    game.hands[hand_index].status = HandStatus::Stood;
-                    if hand_index + 1 < game.hands.len() {
-                        game.current_hand_index += 1;
-                        GameStatus::PlayerTurn
-                    } else {
-                        GameStatus::WaitingForReveal {
-                            reveal_requests: vec![3],
-                            next_status: Box::new(GameStatus::DealerTurn),
-                        }
-                    }
-                } else if let HandStatus::Doubled = game.hands[hand_index].status {
-                    // After Double Down, force stand
-                    game.hands[hand_index].status = HandStatus::Stood;
-                    if hand_index + 1 < game.hands.len() {
-                        game.current_hand_index += 1;
-                        GameStatus::PlayerTurn
-                    } else {
-                        GameStatus::WaitingForReveal {
-                            reveal_requests: vec![3],
-                            next_status: Box::new(GameStatus::DealerTurn),
-                        }
-                    }
-                } else {
-                    GameStatus::PlayerTurn
-                }
-            }
-            GameStatus::DealerTurn => {
-                let d_score = crate::contract::calculate_score(&game.dealer_hand);
-                
-                // Collect results for all hands
-                let mut all_settled = true;
-                let mut results = vec![];
-
-                for hand in &mut game.hands {
-                    if let HandStatus::Settled { .. } = hand.status {
-                        results.push(format!("{:?}", hand.status));
-                        continue;
-                    }
-                    if let HandStatus::Surrendered = hand.status {
-                         hand.status = HandStatus::Settled { winner: "Surrendered".to_string() };
-                         results.push("Surrendered".to_string());
-                         continue;
-                    }
-                    if let HandStatus::Busted = hand.status {
-                        hand.status = HandStatus::Settled { winner: "Dealer".to_string() };
-                        results.push("Dealer".to_string());
-                        continue;
-                    }
-
-                    let p_score = crate::contract::calculate_score(&hand.cards);
-                    
-                    if d_score > 21 {
-                        hand.status = HandStatus::Settled { winner: "Player".to_string() };
-                        results.push("Player".to_string());
-                    } else if d_score >= 17 {
-                        let mut should_hit = false;
-                        if d_score == 17 && config.dealer_hits_soft_17 {
-                            let mut score = 0;
-                            let mut aces = 0;
-                            for &card in &game.dealer_hand {
-                                let val = (card % 13) + 1;
-                                if val == 1 {
-                                    aces += 1;
-                                    score += 11;
-                                } else if val > 10 {
-                                    score += 10;
-                                } else {
-                                    score += val;
-                                }
-                            }
-                            if aces > 0 && score == 17 {
-                                should_hit = true;
-                            }
-                        }
-
-                        if should_hit {
-                            all_settled = false;
-                            break;
-                        } else {
-                            if d_score > p_score {
-                                hand.status = HandStatus::Settled { winner: "Dealer".to_string() };
-                                results.push("Dealer".to_string());
-                            } else if d_score < p_score {
-                                if p_score == 21 && hand.cards.len() == 2 {
-                                    hand.status = HandStatus::Settled { winner: "Player (Blackjack)".to_string() };
-                                    results.push("Player (Blackjack)".to_string());
-                                } else {
-                                    hand.status = HandStatus::Settled { winner: "Player".to_string() };
-                                    results.push("Player".to_string());
-                                }
-                            } else {
-                                if p_score == 21 && hand.cards.len() == 2 && game.dealer_hand.len() != 2 {
-                                    hand.status = HandStatus::Settled { winner: "Player (Blackjack)".to_string() };
-                                    results.push("Player (Blackjack)".to_string());
-                                } else if p_score == 21 && hand.cards.len() != 2 && game.dealer_hand.len() == 2 {
-                                    hand.status = HandStatus::Settled { winner: "Dealer".to_string() };
-                                    results.push("Dealer".to_string());
-                                } else {
-                                    hand.status = HandStatus::Settled { winner: "Push".to_string() };
-                                    results.push("Push".to_string());
-                                }
-                            }
-                        }
-                    } else {
-                        all_settled = false;
-                        break;
-                    }
-                }
-
-                if all_settled {
-                    GameStatus::Settled {
-                        winner: results.join(", "),
-                    }
-                } else {
-                    let card_to_reveal = game.last_card_index;
-                    game.last_card_index += 1;
-                    GameStatus::WaitingForReveal {
-                        reveal_requests: vec![card_to_reveal],
-                        next_status: Box::new(GameStatus::DealerTurn),
-                    }
-                }
-            }
-            _ => *next_status,
-        };
-    } else {
-        game.status = GameStatus::WaitingForReveal {
-            reveal_requests,
-            next_status,
-        };
-    }
-
-    GAMES.save(deps.storage, &info.sender, &game)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "submit_reveal")
-        .add_attribute("card_index", card_index.to_string())
-        .add_attribute("card_value", card_value.to_string()))
-}
-
-pub fn execute_claim_timeout(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-) -> Result<Response, ContractError> {
-    let game = GAMES.load(deps.storage, &info.sender)?;
+    let game = GAMES.load(deps.storage, game_id)?;
 
     // Define timeout threshold (e.g., 5 minutes = 300 seconds)
     const TIMEOUT_SECONDS: u64 = 300;
@@ -556,8 +386,7 @@ pub fn execute_claim_timeout(
 
     if time_elapsed < TIMEOUT_SECONDS {
         return Err(ContractError::Std(StdError::msg(format!(
-            "Timeout not reached. Elapsed: {}s, Required: {}s",
-            time_elapsed, TIMEOUT_SECONDS
+            "Timeout not reached. Elapsed: {time_elapsed}s, Required: {TIMEOUT_SECONDS}s"
         ))));
     }
 
@@ -582,7 +411,7 @@ pub fn execute_claim_timeout(
     };
 
     // Remove game from storage
-    GAMES.remove(deps.storage, &info.sender);
+    GAMES.remove(deps.storage, game_id);
 
     // Build response with refund if player wins
     let mut response = Response::new()
@@ -594,7 +423,7 @@ pub fn execute_claim_timeout(
         response = response.add_message(cosmwasm_std::BankMsg::Send {
             to_address: info.sender.to_string(),
             amount: vec![cosmwasm_std::Coin {
-                denom: "uatom".to_string(), // Replace with actual denom
+                denom: config.denom,
                 amount: refund_amount.into(),
             }],
         });

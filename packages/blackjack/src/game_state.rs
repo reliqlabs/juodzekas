@@ -337,8 +337,10 @@ mod tests {
 
     #[test]
     fn test_spot_cannot_split_max_splits_reached() {
-        let mut rules = GameRules::default();
-        rules.max_splits = 1;
+        let rules = GameRules {
+            max_splits: 1,
+            ..GameRules::default()
+        };
         let mut spot = Spot::new();
         spot.active_hand_mut().add_card(Card::EightHearts);
         spot.active_hand_mut().add_card(Card::EightSpades);
@@ -351,8 +353,10 @@ mod tests {
 
     #[test]
     fn test_spot_cannot_resplit_aces() {
-        let mut rules = GameRules::default();
-        rules.resplit_aces = false;
+        let rules = GameRules {
+            resplit_aces: false,
+            ..GameRules::default()
+        };
         let mut spot = Spot::new();
         spot.active_hand_mut().add_card(Card::AceHearts);
         spot.active_hand_mut().add_card(Card::AceSpades);
@@ -377,16 +381,18 @@ mod tests {
 
     #[test]
     fn test_cannot_double_after_split_when_disabled() {
-        let mut rules = GameRules::default();
-        rules.double_after_split = false;
+        let rules = GameRules {
+            double_after_split: false,
+            ..GameRules::default()
+        };
         let mut game = GameState::new(1, rules).unwrap();
 
-        let rules_clone = game.rules.clone();
+        let rules_info = game.rules;
         {
             let spot = game.active_spot_mut();
             spot.active_hand_mut().add_card(Card::EightHearts);
             spot.active_hand_mut().add_card(Card::EightSpades);
-            spot.split(&rules_clone).unwrap();
+            spot.split(&rules_info).unwrap();
             spot.hands[0].cards.push(Card::TwoClubs);
             spot.hands[1].cards.push(Card::ThreeClubs);
         }
@@ -396,16 +402,18 @@ mod tests {
 
     #[test]
     fn test_can_double_after_split_when_enabled() {
-        let mut rules = GameRules::default();
-        rules.double_after_split = true;
+        let rules = GameRules {
+            double_after_split: true,
+            ..GameRules::default()
+        };
         let mut game = GameState::new(1, rules).unwrap();
 
-        let rules_clone = game.rules.clone();
+        let rules_info = game.rules;
         {
             let spot = game.active_spot_mut();
             spot.active_hand_mut().add_card(Card::EightHearts);
             spot.active_hand_mut().add_card(Card::EightSpades);
-            spot.split(&rules_clone).unwrap();
+            spot.split(&rules_info).unwrap();
             spot.hands[0].cards.push(Card::TwoClubs);
             spot.hands[1].cards.push(Card::ThreeClubs);
         }
@@ -428,8 +436,10 @@ mod tests {
 
     #[test]
     fn test_dealer_should_hit_soft_17() {
-        let mut rules = GameRules::default();
-        rules.dealer_hits_soft_17 = true;
+        let rules = GameRules {
+            dealer_hits_soft_17: true,
+            ..GameRules::default()
+        };
         let mut game = GameState::new(1, rules).unwrap();
 
         game.dealer_hand.push(Card::AceHearts);
@@ -554,8 +564,10 @@ mod tests {
 
     #[test]
     fn test_can_surrender_current_hand() {
-        let mut rules = GameRules::default();
-        rules.allow_surrender = true;
+        let rules = GameRules {
+            allow_surrender: true,
+            ..GameRules::default()
+        };
         let mut game = GameState::new(1, rules).unwrap();
 
         {
@@ -572,16 +584,18 @@ mod tests {
 
     #[test]
     fn test_cannot_surrender_after_split() {
-        let mut rules = GameRules::default();
-        rules.allow_surrender = true;
+        let rules = GameRules {
+            allow_surrender: true,
+            ..GameRules::default()
+        };
         let mut game = GameState::new(1, rules).unwrap();
 
-        let rules_clone = game.rules.clone();
+        let rules_info = game.rules;
         {
             let spot = game.active_spot_mut();
             spot.active_hand_mut().add_card(Card::EightHearts);
             spot.active_hand_mut().add_card(Card::EightSpades);
-            spot.split(&rules_clone).unwrap();
+            spot.split(&rules_info).unwrap();
         }
 
         assert!(!game.can_surrender_current_hand()); // Can't surrender after split

@@ -13,6 +13,8 @@ use ratatui::{
 };
 use std::{error::Error, io};
 use std::sync::{Arc, Mutex};
+use base64::{engine::general_purpose, Engine as _};
+use ark_ff::{BigInteger, PrimeField};
 
 mod game;
 use game::{GameState, GameMode};
@@ -24,9 +26,10 @@ mod contract_msg;
 mod tui_logger;
 use tui_logger::TuiLogger;
 
-// TODO: Re-enable once mob library API is stable
-// mod wallet;
-// use wallet::Wallet;
+#[cfg(feature = "wallet")]
+mod wallet;
+#[cfg(feature = "wallet")]
+use wallet::Wallet;
 
 #[derive(PartialEq)]
 enum GamePhase {
@@ -36,6 +39,10 @@ enum GamePhase {
     PlayerTurn,
     DealerTurn,
     GameOver,
+    // Contract mode phases
+    ContractSetup,        // Wallet and contract connection
+    WaitingForPlayer,     // Dealer waiting for player to join
+    WaitingForReveal,     // Waiting for opponent to reveal card
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -61,6 +68,16 @@ struct App {
     next_game_task: Option<tokio::task::JoinHandle<Result<GameState, String>>>, // Background pre-shuffle for next game
     spot_outcomes: Vec<Vec<SpotOutcome>>, // Track outcome for each hand in each spot at end of round
     log_visible: bool, // Toggle for log visibility
+    // Contract mode fields
+    #[cfg(feature = "wallet")]
+    wallet: Option<Wallet>,
+    contract_address: Option<String>,
+    game_id: Option<u64>, // Current game ID
+    is_dealer: bool, // true if this client is the dealer, false if player
+    rpc_url: String,
+    chain_id: String,
+    contract_address_input: String, // Buffer for typing contract address
+    available_games: Vec<contract_msg::GameListItem>, // List of games player can join
 }
 
 impl App {
@@ -76,7 +93,7 @@ impl App {
                 "Choose your game mode:".to_string(),
                 "[F] Fast - Instant gameplay, no proofs".to_string(),
                 "[T] Trustless - Full ZK proofs, ~1 min setup".to_string(),
-                "[C] Contract - On-chain with smart contract (coming soon)".to_string(),
+                "[C] Contract - On-chain with smart contract".to_string(),
             ],
             log_buffer,
             loading_dots: 0,
@@ -86,6 +103,15 @@ impl App {
             next_game_task: None,
             spot_outcomes: Vec::new(),
             log_visible: true,
+            #[cfg(feature = "wallet")]
+            wallet: None,
+            contract_address: None,
+            game_id: None,
+            is_dealer: false,
+            rpc_url: "https://rpc.xion-testnet-1.burnt.com:443".to_string(),
+            chain_id: "xion-testnet-1".to_string(),
+            contract_address_input: String::new(),
+            available_games: Vec::new(),
         }
     }
 
@@ -123,21 +149,21 @@ impl App {
         };
 
         let hand_label = if num_hands > 1 {
-            format!("Spot {}.{}", spot, hand_in_spot)
+            format!("Spot {spot}.{hand_in_spot}")
         } else {
-            format!("Spot {}", spot)
+            format!("Spot {spot}")
         };
 
-        self.add_log(format!("{} hits", hand_label));
+        self.add_log(format!("{hand_label} hits"));
 
         if player_value > 21 {
-            self.add_log(format!("{} busts with {}!", hand_label, player_value));
+            self.add_log(format!("{hand_label} busts with {player_value}!"));
             self.move_to_next_spot_or_dealer()?;
         } else if player_value == 21 {
-            self.add_log(format!("{} has 21!", hand_label));
+            self.add_log(format!("{hand_label} has 21!"));
             self.move_to_next_spot_or_dealer()?;
         } else {
-            self.add_log(format!("{} has {}", hand_label, player_value));
+            self.add_log(format!("{hand_label} has {player_value}"));
         }
 
         Ok(())
@@ -155,7 +181,7 @@ impl App {
             } else {
                 format!("Spot {}", spot + 1)
             };
-            self.add_log(format!("{} stands", hand_label));
+            self.add_log(format!("{hand_label} stands"));
         }
 
         self.move_to_next_spot_or_dealer()?;
@@ -189,7 +215,7 @@ impl App {
             };
 
             if current_value == 21 {
-                self.add_log(format!("{} has 21!", hand_label));
+                self.add_log(format!("{hand_label} has 21!"));
                 // Mark as stood so it can't be played
                 if let Some(ref mut game) = self.game_state {
                     game.hands_stood[active_spot][active_hand] = true;
@@ -209,7 +235,7 @@ impl App {
                 if can_surrender { options.push("Su[r]render"); }
 
                 self.status = format!("{}: {}", hand_label, options.join(" or "));
-                self.add_log(format!("Playing {}", hand_label));
+                self.add_log(format!("Playing {hand_label}"));
             }
         } else {
             // All spots/hands done, move to dealer
@@ -238,10 +264,10 @@ impl App {
                 break;
             };
 
-            self.add_log(format!("Dealer hits, has {}", dealer_value));
+            self.add_log(format!("Dealer hits, has {dealer_value}"));
 
             if dealer_value > 21 {
-                self.add_log(format!("Dealer busts with {}!", dealer_value));
+                self.add_log(format!("Dealer busts with {dealer_value}!"));
 
                 // All non-busted, non-surrendered hands win
                 let hands_values: Vec<(usize, usize, u8, bool)> = if let Some(ref game) = self.game_state {
@@ -277,15 +303,15 @@ impl App {
                     };
 
                     let outcome = if surrendered {
-                        self.add_log(format!("{}: Surrendered (half loss)", hand_label));
+                        self.add_log(format!("{hand_label}: Surrendered (half loss)"));
                         surrenders += 1;
                         SpotOutcome::Surrender
                     } else if player_value > 21 {
-                        self.add_log(format!("{}: Bust (loss)", hand_label));
+                        self.add_log(format!("{hand_label}: Bust (loss)"));
                         losses += 1;
                         SpotOutcome::Loss
                     } else {
-                        self.add_log(format!("{}: {} - WIN", hand_label, player_value));
+                        self.add_log(format!("{hand_label}: {player_value} - WIN"));
                         wins += 1;
                         SpotOutcome::Win
                     };
@@ -293,9 +319,9 @@ impl App {
                 }
 
                 let status_msg = if surrenders > 0 {
-                    format!("Dealer busts! {} wins, {} losses, {} surrenders. Press [N] for next game", wins, losses, surrenders)
+                    format!("Dealer busts! {wins} wins, {losses} losses, {surrenders} surrenders. Press [N] for next game")
                 } else {
-                    format!("Dealer busts! {} wins, {} losses. Press [N] for next game", wins, losses)
+                    format!("Dealer busts! {wins} wins, {losses} losses. Press [N] for next game")
                 };
                 self.status = status_msg;
                 self.phase = GamePhase::GameOver;
@@ -318,7 +344,7 @@ impl App {
             return Ok(());
         };
 
-        self.add_log(format!("Dealer stands with {}", dealer_value));
+        self.add_log(format!("Dealer stands with {dealer_value}"));
 
         let mut wins = 0;
         let mut losses = 0;
@@ -343,23 +369,23 @@ impl App {
             };
 
             let outcome = if surrendered {
-                self.add_log(format!("{}: Surrendered (half loss)", hand_label));
+                self.add_log(format!("{hand_label}: Surrendered (half loss)"));
                 surrenders += 1;
                 SpotOutcome::Surrender
             } else if player_value > 21 {
-                self.add_log(format!("{}: Bust (loss)", hand_label));
+                self.add_log(format!("{hand_label}: Bust (loss)"));
                 losses += 1;
                 SpotOutcome::Loss
             } else if player_value > dealer_value {
-                self.add_log(format!("{}: {} vs {} - WIN", hand_label, player_value, dealer_value));
+                self.add_log(format!("{hand_label}: {player_value} vs {dealer_value} - WIN"));
                 wins += 1;
                 SpotOutcome::Win
             } else if dealer_value > player_value {
-                self.add_log(format!("{}: {} vs {} - Loss", hand_label, player_value, dealer_value));
+                self.add_log(format!("{hand_label}: {player_value} vs {dealer_value} - Loss"));
                 losses += 1;
                 SpotOutcome::Loss
             } else {
-                self.add_log(format!("{}: {} vs {} - Push", hand_label, player_value, dealer_value));
+                self.add_log(format!("{hand_label}: {player_value} vs {dealer_value} - Push"));
                 pushes += 1;
                 SpotOutcome::Push
             };
@@ -367,13 +393,386 @@ impl App {
         }
 
         let status_msg = if surrenders > 0 {
-            format!("Results: {} wins, {} losses, {} pushes, {} surrenders. Press [N] for next game", wins, losses, pushes, surrenders)
+            format!("Results: {wins} wins, {losses} losses, {pushes} pushes, {surrenders} surrenders. Press [N] for next game")
         } else {
-            format!("Results: {} wins, {} losses, {} pushes. Press [N] for next game", wins, losses, pushes)
+            format!("Results: {wins} wins, {losses} losses, {pushes} pushes. Press [N] for next game")
         };
         self.status = status_msg;
 
         self.phase = GamePhase::GameOver;
+        Ok(())
+    }
+
+    #[cfg(feature = "wallet")]
+    async fn query_contract_raw(&self, query_msg: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let wallet = self.wallet.as_ref().ok_or("Wallet not initialized")?;
+        let client = wallet.client().ok_or("Client not connected")?;
+        let contract_addr = self.contract_address.as_ref().ok_or("Contract address not set")?;
+
+        let path = "/cosmwasm.wasm.v1.Query/SmartContractState";
+        let data = {
+            use prost::Message;
+            let req = xion_types::cosmwasm::wasm::v1::QuerySmartContractStateRequest {
+                address: contract_addr.clone(),
+                query_data: query_msg.to_vec(),
+            };
+            req.encode_to_vec()
+        };
+
+        use tendermint_rpc::{Client as TmClient, HttpClient};
+        let rpc_url = client.config().rpc_endpoint;
+        let tm_client = HttpClient::new(rpc_url.as_str())?;
+        
+        let response = tm_client.abci_query(Some(path.to_string()), data, None, false).await?;
+
+        if response.code.is_err() {
+            return Err(format!("ABCI query failed: {}", response.log).into());
+        }
+
+        use prost::Message;
+        let res_wrapper = xion_types::cosmwasm::wasm::v1::QuerySmartContractStateResponse::decode(response.value.as_slice())?;
+        Ok(res_wrapper.data)
+    }
+
+    #[cfg(feature = "wallet")]
+    async fn query_game_by_id(&self, game_id: u64) -> Result<contract_msg::GameResponse, Box<dyn std::error::Error>> {
+        let query_msg = serde_json::json!({
+            "get_game": {
+                "game_id": game_id
+            }
+        });
+        let query_bytes = serde_json::to_vec(&query_msg)?;
+        let response_bytes = self.query_contract_raw(&query_bytes).await?;
+        let response: contract_msg::GameResponse = serde_json::from_slice(&response_bytes)?;
+        Ok(response)
+    }
+
+    #[cfg(feature = "wallet")]
+    async fn query_list_games(&self, status_filter: Option<String>) -> Result<Vec<contract_msg::GameListItem>, Box<dyn std::error::Error>> {
+        let query_msg = serde_json::json!({
+            "list_games": {
+                "status_filter": status_filter
+            }
+        });
+        let query_bytes = serde_json::to_vec(&query_msg)?;
+        let response_bytes = self.query_contract_raw(&query_bytes).await?;
+        let response: Vec<contract_msg::GameListItem> = serde_json::from_slice(&response_bytes)?;
+        Ok(response)
+    }
+
+    #[cfg(feature = "wallet")]
+    async fn create_contract_game(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use zk_shuffle::elgamal::{KeyPair, encrypt};
+        use zk_shuffle::shuffle::shuffle;
+        use zk_shuffle::proof::generate_shuffle_proof_rapidsnark;
+        use zk_shuffle::babyjubjub::{Point, Fr};
+        use ark_ec::{CurveGroup, AffineRepr};
+        use ark_std::UniformRand;
+        use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
+
+        self.add_log("Generating dealer keypair and shuffle...".to_string());
+
+        let mut rng = ChaCha8Rng::from_entropy();
+
+        // Generate keypair for dealer
+        let dealer_keys = KeyPair::generate(&mut rng);
+
+        // Create card mapping (52 cards)
+        let g = Point::generator();
+        let mut card_mapping = Vec::new();
+        for i in 1..=52 {
+            let card_point = (g.into_group() * Fr::from(i as u64)).into_affine();
+            card_mapping.push(card_point);
+        }
+
+        // Initial encryption with dealer's public key
+        let mut encrypted_deck = Vec::new();
+        for &card in &card_mapping {
+            let r = Fr::rand(&mut rng);
+            let ct = encrypt(&dealer_keys.pk, &card, &r);
+            encrypted_deck.push(ct);
+        }
+
+        // Shuffle
+        self.add_log("Shuffling deck...".to_string());
+        let dealer_shuffle = shuffle(&mut rng, &encrypted_deck, &dealer_keys.pk);
+
+        // Generate ZK proof
+        self.add_log("Generating ZK proof (this may take ~1 minute)...".to_string());
+        let dealer_proof = generate_shuffle_proof_rapidsnark(
+            &dealer_shuffle.public_inputs,
+            dealer_shuffle.private_inputs,
+        )?;
+
+        self.add_log("Proof generated!".to_string());
+
+        // Serialize for contract
+        let public_key_bytes = format!("{},{}",
+            dealer_keys.pk.x,
+            dealer_keys.pk.y
+        );
+
+        let shuffled_deck_strs: Vec<String> = dealer_shuffle.deck
+            .iter()
+            .map(|ct| {
+                format!("{},{},{},{}",
+                    ct.c0.x,
+                    ct.c0.y,
+                    ct.c1.x,
+                    ct.c1.y
+                )
+            })
+            .collect();
+
+        let proof_json = serde_json::to_string(&dealer_proof)?;
+
+        let public_inputs_strs: Vec<String> = dealer_shuffle.public_inputs
+            .to_ark_public_inputs()
+            .iter()
+            .map(|f| {
+                let bigint = num_bigint::BigInt::from_bytes_le(
+                    num_bigint::Sign::Plus,
+                    &f.into_bigint().to_bytes_le()
+                );
+                bigint.to_string()
+            })
+            .collect();
+
+        let msg_json = serde_json::json!({
+            "create_game": {
+                "public_key": general_purpose::STANDARD.encode(&public_key_bytes),
+                "shuffled_deck": shuffled_deck_strs.iter().map(|s| general_purpose::STANDARD.encode(s)).collect::<Vec<_>>(),
+                "proof": general_purpose::STANDARD.encode(&proof_json),
+                "public_inputs": public_inputs_strs,
+            }
+        });
+
+        let msg_bytes = serde_json::to_vec(&msg_json)?;
+
+        self.add_log("CreateGame message prepared".to_string());
+        self.add_log("Submitting transaction...".to_string());
+
+        // Submit transaction
+        let wallet = self.wallet.as_ref().ok_or("Wallet not initialized")?;
+        let client = wallet.client().ok_or("Client not connected")?;
+        let contract_addr = self.contract_address.clone().ok_or("Contract address not set")?;
+
+        let tx_response = client.execute_contract(
+            contract_addr,
+            msg_bytes,
+            vec![], // No funds for CreateGame
+            Some("Create blackjack game".to_string()),
+        )?;
+
+        if tx_response.code == 0 {
+            self.add_log(format!("✓ Transaction successful! Hash: {}", tx_response.txhash));
+
+            // Query list of games to find the newly created one
+            // Since we just created it, query for games where we are the dealer
+            let games = self.query_list_games(Some("WaitingForPlayerJoin".to_string())).await?;
+
+            // Find the game where we are the dealer
+            let wallet = self.wallet.as_ref().ok_or("Wallet not available")?;
+            let our_address = wallet.address();
+            let game_id = games.iter()
+                .find(|g| g.dealer == our_address)
+                .map(|g| g.game_id)
+                .ok_or("Could not find newly created game")?;
+
+            self.game_id = Some(game_id);
+            self.add_log(format!("Game ID: {game_id}"));
+            self.phase = GamePhase::WaitingForPlayer;
+            self.status = format!("Waiting for player to join game {game_id}...");
+        } else {
+            return Err(format!("Transaction failed: {}", tx_response.raw_log).into());
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "wallet")]
+    async fn join_contract_game(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use zk_shuffle::elgamal::{KeyPair, Ciphertext};
+        use zk_shuffle::shuffle::shuffle;
+        use zk_shuffle::proof::generate_shuffle_proof_rapidsnark;
+        use zk_shuffle::babyjubjub::Point;
+        use ark_ec::{AffineRepr, CurveGroup};
+        
+        use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
+
+        self.add_log("Generating player keypair...".to_string());
+
+        let mut rng = ChaCha8Rng::from_entropy();
+        let player_keys = KeyPair::generate(&mut rng);
+
+        // Query game by game_id
+        let game_id = self.game_id.ok_or("No game selected")?;
+        self.add_log(format!("Querying game {game_id}..."));
+
+        let dealer_game = self.query_game_by_id(game_id).await?;
+
+        // Extract dealer's shuffled deck from player_shuffled_deck field
+        let dealer_shuffled = dealer_game.player_shuffled_deck
+            .ok_or("Dealer hasn't shuffled deck yet")?;
+
+        self.add_log(format!("Retrieved dealer's shuffled deck ({} cards)", dealer_shuffled.len()));
+
+        // Parse dealer's deck from Binary format
+        let dealer_deck: Vec<Ciphertext> = dealer_shuffled
+            .iter()
+            .map(|binary| {
+                // Binary format is "x0,y0,x1,y1" as decimal string
+                let s = String::from_utf8(binary.to_vec())
+                    .map_err(|e| format!("Failed to parse binary: {e}"))?;
+                let parts: Vec<&str> = s.split(',').collect();
+                if parts.len() != 4 {
+                    return Err(format!("Invalid ciphertext format: {s}").into());
+                }
+
+                use ark_ff::PrimeField;
+                type Fq = <Point as AffineRepr>::BaseField;
+
+                // Parse decimal strings to field elements
+                let parse_fq = |s: &str| -> Result<Fq, Box<dyn std::error::Error>> {
+                    let bigint = num_bigint::BigInt::parse_bytes(s.as_bytes(), 10)
+                        .ok_or_else(|| format!("Invalid decimal: {s}"))?;
+                    let bytes = bigint.to_bytes_le().1;
+                    Ok(Fq::from_le_bytes_mod_order(&bytes))
+                };
+
+                let x0 = parse_fq(parts[0])?;
+                let y0 = parse_fq(parts[1])?;
+                let x1 = parse_fq(parts[2])?;
+                let y1 = parse_fq(parts[3])?;
+
+                Ok(Ciphertext {
+                    c0: Point::new_unchecked(x0, y0),
+                    c1: Point::new_unchecked(x1, y1),
+                })
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+
+        // Parse dealer's public key
+        let dealer_pk_binary = &dealer_game.dealer_pubkey;
+        let dealer_pk_str = String::from_utf8(dealer_pk_binary.to_vec())?;
+        let pk_parts: Vec<&str> = dealer_pk_str.split(',').collect();
+        if pk_parts.len() != 2 {
+            return Err(format!("Invalid dealer pubkey format: {dealer_pk_str}").into());
+        }
+
+        use ark_ff::PrimeField;
+        type Fq = <Point as AffineRepr>::BaseField;
+
+        let parse_fq = |s: &str| -> Result<Fq, Box<dyn std::error::Error>> {
+            let bigint = num_bigint::BigInt::parse_bytes(s.as_bytes(), 10)
+                .ok_or_else(|| format!("Invalid decimal: {s}"))?;
+            let bytes = bigint.to_bytes_le().1;
+            Ok(Fq::from_le_bytes_mod_order(&bytes))
+        };
+
+        let dealer_pk = Point::new_unchecked(
+            parse_fq(pk_parts[0])?,
+            parse_fq(pk_parts[1])?
+        );
+
+        self.add_log("Parsed dealer's public key".to_string());
+
+        // Aggregate public keys (player + dealer)
+        let aggregated_pk = (player_keys.pk.into_group() + dealer_pk.into_group()).into_affine();
+
+        // Re-shuffle dealer's deck
+        self.add_log("Shuffling deck...".to_string());
+        let player_shuffle = shuffle(&mut rng, &dealer_deck, &aggregated_pk);
+
+        // Generate ZK proof
+        self.add_log("Generating ZK proof (this may take ~1 minute)...".to_string());
+        let player_proof = generate_shuffle_proof_rapidsnark(
+            &player_shuffle.public_inputs,
+            player_shuffle.private_inputs,
+        )?;
+
+        self.add_log("Proof generated!".to_string());
+
+        // Serialize for contract
+        let public_key_str = format!("{},{}",
+            player_keys.pk.x,
+            player_keys.pk.y
+        );
+
+        let shuffled_deck_strs: Vec<String> = player_shuffle.deck
+            .iter()
+            .map(|ct| {
+                format!("{},{},{},{}",
+                    ct.c0.x,
+                    ct.c0.y,
+                    ct.c1.x,
+                    ct.c1.y
+                )
+            })
+            .collect();
+
+        let proof_json = serde_json::to_string(&player_proof)?;
+
+        let public_inputs_strs: Vec<String> = {
+            player_shuffle.public_inputs
+                .to_ark_public_inputs()
+                .iter()
+                .map(|f| {
+                    let bigint = num_bigint::BigInt::from_bytes_le(
+                        num_bigint::Sign::Plus,
+                        &f.into_bigint().to_bytes_le()
+                    );
+                    bigint.to_string()
+                })
+                .collect()
+        };
+
+        let bet_amount = "1000000"; // 1 token
+        let msg_json = serde_json::json!({
+            "join_game": {
+                "game_id": game_id,
+                "bet": bet_amount,
+                "public_key": general_purpose::STANDARD.encode(&public_key_str),
+                "shuffled_deck": shuffled_deck_strs.iter().map(|s| general_purpose::STANDARD.encode(s)).collect::<Vec<_>>(),
+                "proof": general_purpose::STANDARD.encode(&proof_json),
+                "public_inputs": public_inputs_strs,
+            }
+        });
+
+        let msg_bytes = serde_json::to_vec(&msg_json)?;
+
+        self.add_log("JoinGame message prepared".to_string());
+        self.add_log("Querying contract config for denom...".to_string());
+        // TODO: Query contract config to get denom dynamically instead of hardcoding
+        // TODO: Add contract execute message support for Hit, Stand, DoubleDown, Split, Surrender, SubmitReveal with game_id
+        let denom = "uxion".to_string();
+        self.add_log(format!("Submitting transaction with {bet_amount} {denom}..."));
+
+        // Submit transaction with funds
+        let wallet = self.wallet.as_ref().ok_or("Wallet not initialized")?;
+        let client = wallet.client().ok_or("Client not connected")?;
+        let contract_addr = self.contract_address.clone().ok_or("Contract address not set")?;
+
+        let funds = vec![mob::Coin {
+            denom,
+            amount: bet_amount.to_string(),
+        }];
+
+        let tx_response = client.execute_contract(
+            contract_addr,
+            msg_bytes,
+            funds,
+            Some("Join blackjack game".to_string()),
+        )?;
+
+        if tx_response.code == 0 {
+            self.add_log(format!("✓ Transaction successful! Hash: {}", tx_response.txhash));
+            self.phase = GamePhase::WaitingForReveal;
+            self.status = "Game started! Waiting for reveals...".to_string();
+        } else {
+            return Err(format!("Transaction failed: {}", tx_response.raw_log).into());
+        }
+
         Ok(())
     }
 }
@@ -407,7 +806,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("{:?}", err)
+        println!("{err:?}")
     }
 
     Ok(())
@@ -433,9 +832,10 @@ where
                     Some("Loading keys")
                 } else if last_log.contains("Using cached proving keys") {
                     Some("Using cached keys")
-                } else if last_log.contains("Proving key loaded") || last_log.contains("Initializing deck") {
-                    Some("Shuffling")
-                } else if last_log.contains("Shuffling deck") {
+                } else if last_log.contains("Proving key loaded")
+                    || last_log.contains("Initializing deck")
+                    || last_log.contains("Shuffling deck")
+                {
                     Some("Shuffling")
                 } else if last_log.contains("Generating player shuffle proof") {
                     Some("Player shuffle proof")
@@ -457,7 +857,7 @@ where
 
                         app.current_init_stage = stage.to_string();
                         app.init_start_time = Some(std::time::Instant::now());
-                        app.add_log(format!(">>> {} started <<<", stage));
+                        app.add_log(format!(">>> {stage} started <<<"));
                     }
                 }
             }
@@ -467,9 +867,9 @@ where
                 if !app.current_init_stage.is_empty() {
                     app.status = format!("{} {}s{:<3}", app.current_init_stage, elapsed, dots);
                 } else if app.selected_mode == Some(GameMode::Trustless) {
-                    app.status = format!("Initializing{}s{:<3}", elapsed, dots);
+                    app.status = format!("Initializing{elapsed}s{dots:<3}");
                 } else if app.selected_mode == Some(GameMode::Fast) {
-                    app.status = format!("Creating fast game{:<3}", dots);
+                    app.status = format!("Creating fast game{dots:<3}");
                 }
             }
         }
@@ -507,7 +907,7 @@ where
 
                             // Resize for actual number of spots
                             if let Err(e) = game_state.resize_for_spots(num_spots) {
-                                app.add_log(format!("ERROR: {}", e));
+                                app.add_log(format!("ERROR: {e}"));
                                 app.status = "Error setting spots. Press [F] or [T] to try again".to_string();
                                 app.phase = GamePhase::ModeSelection;
                                 app.selected_mode = None;
@@ -518,19 +918,19 @@ where
                                 // Deal initial cards
                                 for spot in 0..num_spots {
                                     if let Err(e) = game_state.draw_card(false, Some(spot)) {
-                                        app.add_log(format!("Error dealing: {}", e));
+                                        app.add_log(format!("Error dealing: {e}"));
                                     }
                                 }
                                 if let Err(e) = game_state.draw_card(true, None) {
-                                    app.add_log(format!("Error dealing: {}", e));
+                                    app.add_log(format!("Error dealing: {e}"));
                                 }
                                 for spot in 0..num_spots {
                                     if let Err(e) = game_state.draw_card(false, Some(spot)) {
-                                        app.add_log(format!("Error dealing: {}", e));
+                                        app.add_log(format!("Error dealing: {e}"));
                                     }
                                 }
                                 if let Err(e) = game_state.draw_card(true, None) {
-                                    app.add_log(format!("Error dealing: {}", e));
+                                    app.add_log(format!("Error dealing: {e}"));
                                 }
 
                                 app.game_state = Some(game_state);
@@ -548,7 +948,7 @@ where
                                     if has_blackjack {
                                         app.add_log("Dealer peeks and has Blackjack!".to_string());
                                         if let Err(e) = app.dealer_play() {
-                                            app.add_log(format!("Error: {}", e));
+                                            app.add_log(format!("Error: {e}"));
                                         }
                                         // Early return - game over, dealer has blackjack
                                         return Ok(());
@@ -564,13 +964,13 @@ where
                                 };
 
                                 if first_spot_value == 21 {
-                                    app.add_log(format!("Game started! Spot 1/{} has Blackjack!", num_spots));
+                                    app.add_log(format!("Game started! Spot 1/{num_spots} has Blackjack!"));
                                     // Mark first spot as stood
                                     if let Some(ref mut game) = app.game_state {
                                         game.hands_stood[0][0] = true;
                                     }
                                     if let Err(e) = app.move_to_next_spot_or_dealer() {
-                                        app.add_log(format!("Error: {}", e));
+                                        app.add_log(format!("Error: {e}"));
                                     }
                                 } else {
                                     let game = app.game_state.as_ref().unwrap();
@@ -603,7 +1003,7 @@ where
                             }
                         }
                         Ok(Err(e)) => {
-                            app.add_log(format!("ERROR: {}", e));
+                            app.add_log(format!("ERROR: {e}"));
                             app.status = "Error starting game. Press [F] or [T] to try again".to_string();
                             app.phase = GamePhase::ModeSelection;
                             app.selected_mode = None;
@@ -612,7 +1012,7 @@ where
                             app.current_init_stage.clear();
                         }
                         Err(e) => {
-                            app.add_log(format!("Task error: {}", e));
+                            app.add_log(format!("Task error: {e}"));
                             app.status = "Error starting game. Press [F] or [T] to try again".to_string();
                             app.phase = GamePhase::ModeSelection;
                             app.selected_mode = None;
@@ -663,32 +1063,199 @@ where
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {
                     if matches!(app.phase, GamePhase::ModeSelection | GamePhase::GameOver) {
-                        app.add_log("CONTRACT mode not yet implemented".to_string());
-                        app.add_log("This will enable on-chain gameplay with smart contracts".to_string());
-                        app.add_log("Coming soon! Press F or T to play locally".to_string());
-                        // For now, don't change phase - let user select another mode
+                        #[cfg(feature = "wallet")]
+                        {
+                            app.selected_mode = Some(GameMode::Contract);
+                            app.phase = GamePhase::ContractSetup;
+                            app.add_log("CONTRACT mode selected".to_string());
+                            app.add_log("Choose role: [D]ealer or [P]layer?".to_string());
+                            app.status = "Choose your role: [D]ealer (create game) or [P]layer (join game)?".to_string();
+                        }
+                        #[cfg(not(feature = "wallet"))]
+                        {
+                            app.add_log("CONTRACT mode requires wallet feature".to_string());
+                            app.add_log("Build with --features wallet to enable".to_string());
+                        }
                     }
                 }
-                KeyCode::Char('1'..='8') => {
+                KeyCode::Char('d') | KeyCode::Char('D') => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup {
+                        app.is_dealer = true;
+                        app.add_log("Role: DEALER".to_string());
+                        app.add_log("Enter mnemonic path or press [G] to generate new wallet".to_string());
+                        app.status = "Press [G] to generate new wallet or provide mnemonic".to_string();
+                    } else if matches!(app.phase, GamePhase::PlayerTurn) {
+                        // Handle double down
+                        let can_double = app.game_state.as_ref().map(|g| g.can_double()).unwrap_or(false);
+                        if can_double {
+                            let (spot, hand, num_hands, success, player_value) = if let Some(ref mut game) = app.game_state {
+                                let spot = game.active_spot;
+                                let hand = game.active_hand_in_spot;
+                                let num_hands = game.player_hands[spot].len();
+                                match game.double_down() {
+                                    Ok(_) => (spot + 1, hand + 1, num_hands, true, GameState::calculate_hand_value(&game.player_hands[spot][hand])),
+                                    Err(e) => {
+                                        app.add_log(format!("Error: {e}"));
+                                        (spot + 1, hand + 1, num_hands, false, 0)
+                                    }
+                                }
+                            } else {
+                                (0, 0, 1, false, 0)
+                            };
+
+                            if success {
+                                let hand_label = if num_hands > 1 {
+                                    format!("Spot {spot}.{hand}")
+                                } else {
+                                    format!("Spot {spot}")
+                                };
+                                app.add_log(format!("{hand_label} doubles down!"));
+                                if player_value > 21 {
+                                    app.add_log(format!("{hand_label} busts with {player_value}!"));
+                                }
+                                // Double down auto-stands, so move to next hand/spot
+                                if let Err(e) = app.move_to_next_spot_or_dealer() {
+                                    app.add_log(format!("Error: {e}"));
+                                }
+                            }
+                        } else {
+                            app.add_log("Cannot double down now".to_string());
+                        }
+                    }
+                }
+                KeyCode::Char('p') | KeyCode::Char('P') => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup {
+                        app.is_dealer = false;
+                        app.add_log("Role: PLAYER".to_string());
+                        app.add_log("Enter mnemonic path or press [G] to generate new wallet".to_string());
+                        app.status = "Press [G] to generate new wallet or provide mnemonic".to_string();
+                    } else if matches!(app.phase, GamePhase::PlayerTurn) {
+                        // Handle split
+                        let (split_result, spot, can_double) = if let Some(ref mut game) = app.game_state {
+                            if game.can_split() {
+                                let result = game.split();
+                                let spot = game.active_spot + 1;
+                                let can_double = game.can_double();
+                                (Some(result), spot, can_double)
+                            } else {
+                                (None, 0, false)
+                            }
+                        } else {
+                            (None, 0, false)
+                        };
+
+                        if let Some(result) = split_result {
+                            match result {
+                                Ok(_) => {
+                                    app.add_log(format!("Spot {spot} splits!"));
+                                    let can_surrender = app.game_state.as_ref().map(|g| g.can_surrender()).unwrap_or(false);
+                                    let mut options = vec!["[H]it", "[S]tand"];
+                                    if can_double { options.push("[D]ouble"); }
+                                    if can_surrender { options.push("Su[r]render"); }
+                                    app.status = format!("Spot {}.1/2: {}", spot, options.join(" or "));
+                                }
+                                Err(e) => {
+                                    app.add_log(format!("Error: {e}"));
+                                }
+                            }
+                        } else {
+                            app.add_log("Cannot split".to_string());
+                        }
+                    }
+                }
+                KeyCode::Char('g') | KeyCode::Char('G') => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup {
+                        match Wallet::generate("xion") {
+                            Ok((mut wallet, mnemonic)) => {
+                                app.add_log(format!("New wallet: {}", wallet.address()));
+                                app.add_log(format!("Mnemonic: {mnemonic}"));
+                                app.add_log("IMPORTANT: Save this mnemonic!".to_string());
+
+                                // Connect to RPC
+                                app.add_log(format!("Connecting to {}", app.rpc_url));
+                                match wallet.connect(&app.chain_id, &app.rpc_url, "xion") {
+                                    Ok(_) => {
+                                        app.add_log("Connected to blockchain".to_string());
+                                        app.wallet = Some(wallet);
+                                        if app.is_dealer {
+                                            app.add_log("Press [N] to deploy new contract".to_string());
+                                            app.status = "Press [N] to deploy new contract".to_string();
+                                        } else {
+                                            app.add_log("Enter contract address to join game".to_string());
+                                            app.status = "Enter contract address".to_string();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.add_log(format!("RPC connection failed: {e}"));
+                                        app.status = "Connection failed. Press [Q] to quit".to_string();
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                app.add_log(format!("Wallet generation failed: {e}"));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('0'..='9') => {
                     if app.phase == GamePhase::SpotSelection {
                         let num_spots = key.code.to_string().parse::<usize>().unwrap();
-                        app.selected_spots = Some(num_spots);
-                        app.phase = GamePhase::Initializing;
-                        app.loading_dots = 0;
-                        app.add_log(format!("Starting game with {} spot(s)", num_spots));
+                        if (1..=8).contains(&num_spots) {
+                            app.selected_spots = Some(num_spots);
+                            app.phase = GamePhase::Initializing;
+                            app.loading_dots = 0;
+                            app.add_log(format!("Starting game with {num_spots} spot(s)"));
+                        }
+                    }
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && !app.is_dealer && !app.available_games.is_empty() {
+                        // Player selecting game from list
+                        let idx = key.code.to_string().parse::<usize>().unwrap();
+                        if idx < app.available_games.len() {
+                            let game_id = app.available_games[idx].game_id;
+                            let dealer = app.available_games[idx].dealer.clone();
+                            app.game_id = Some(game_id);
+                            app.add_log(format!("Selected game {game_id} by dealer {dealer}"));
+                            app.add_log("Press [J] to join this game".to_string());
+                            app.status = format!("Press [J] to join game {game_id}");
+                        }
                     }
                 }
                 KeyCode::Char('h') | KeyCode::Char('H') => {
                     if matches!(app.phase, GamePhase::PlayerTurn) {
                         if let Err(e) = app.player_hit() {
-                            app.add_log(format!("Error: {}", e));
+                            app.add_log(format!("Error: {e}"));
                         }
                     }
                 }
                 KeyCode::Char('s') | KeyCode::Char('S') => {
-                    if matches!(app.phase, GamePhase::PlayerTurn) {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && app.is_dealer && app.contract_address.is_some() {
+                        // Start game (dealer creates game)
+                        let create_result = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(app.create_contract_game())
+                        });
+                        if let Err(e) = create_result {
+                            app.add_log(format!("Failed to create game: {e}"));
+                        }
+                    } else if matches!(app.phase, GamePhase::PlayerTurn) {
                         if let Err(e) = app.player_stand() {
-                            app.add_log(format!("Error: {}", e));
+                            app.add_log(format!("Error: {e}"));
+                        }
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Char('J') => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && !app.is_dealer && app.contract_address.is_some() && app.game_id.is_some() {
+                        // Join game (player joins)
+                        let join_result = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(app.join_contract_game())
+                        });
+                        if let Err(e) = join_result {
+                            app.add_log(format!("Failed to join game: {e}"));
                         }
                     }
                 }
@@ -712,17 +1279,17 @@ where
                             match result {
                                 Ok(_) => {
                                     let hand_label = if num_hands > 1 {
-                                        format!("Spot {}.{}", spot, hand)
+                                        format!("Spot {spot}.{hand}")
                                     } else {
-                                        format!("Spot {}", spot)
+                                        format!("Spot {spot}")
                                     };
-                                    app.add_log(format!("{} surrenders!", hand_label));
+                                    app.add_log(format!("{hand_label} surrenders!"));
                                     if let Err(e) = app.move_to_next_spot_or_dealer() {
-                                        app.add_log(format!("Error: {}", e));
+                                        app.add_log(format!("Error: {e}"));
                                     }
                                 }
                                 Err(e) => {
-                                    app.add_log(format!("Error: {}", e));
+                                    app.add_log(format!("Error: {e}"));
                                 }
                             }
                         } else {
@@ -731,7 +1298,13 @@ where
                     }
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
-                    if app.phase == GamePhase::GameOver {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && app.is_dealer {
+                        // TODO: Add automatic contract deployment instead of manual address entry
+                        app.add_log("Enter contract address and press [Enter]".to_string());
+                        app.add_log("Example: xion1abcd...".to_string());
+                        app.status = "Type contract address, press [Enter] to continue".to_string();
+                    } else if app.phase == GamePhase::GameOver {
                         // Check if next game is ready
                         if let Some(task) = &mut app.next_game_task {
                             if task.is_finished() {
@@ -749,7 +1322,7 @@ where
                                             }
                                         }
                                         if let Err(e) = next_game.draw_card(true, None) {
-                                            app.add_log(format!("Error dealing to dealer: {}", e));
+                                            app.add_log(format!("Error dealing to dealer: {e}"));
                                         }
                                         for spot in 0..num_spots {
                                             if let Err(e) = next_game.draw_card(false, Some(spot)) {
@@ -757,7 +1330,7 @@ where
                                             }
                                         }
                                         if let Err(e) = next_game.draw_card(true, None) {
-                                            app.add_log(format!("Error dealing to dealer: {}", e));
+                                            app.add_log(format!("Error dealing to dealer: {e}"));
                                         }
 
                                         app.game_state = Some(next_game);
@@ -774,7 +1347,7 @@ where
                                             if has_blackjack {
                                                 app.add_log("Dealer peeks and has Blackjack!".to_string());
                                                 if let Err(e) = app.dealer_play() {
-                                                    app.add_log(format!("Error: {}", e));
+                                                    app.add_log(format!("Error: {e}"));
                                                 }
                                                 // Early return - game over, dealer has blackjack
                                                 return Ok(());
@@ -815,12 +1388,12 @@ where
                                         app.next_game_task = Some(next_task);
                                     }
                                     Ok(Err(e)) => {
-                                        app.add_log(format!("Next game ERROR: {}. Press [F] or [T] to restart", e));
+                                        app.add_log(format!("Next game ERROR: {e}. Press [F] or [T] to restart"));
                                         app.status = "Next game failed. Press [F] or [T] to restart".to_string();
                                         app.phase = GamePhase::ModeSelection;
                                     }
                                     Err(e) => {
-                                        app.add_log(format!("Next game task error: {}. Press [F] or [T] to restart", e));
+                                        app.add_log(format!("Next game task error: {e}. Press [F] or [T] to restart"));
                                         app.status = "Next game failed. Press [F] or [T] to restart".to_string();
                                         app.phase = GamePhase::ModeSelection;
                                     }
@@ -835,79 +1408,6 @@ where
                         }
                     }
                 }
-                KeyCode::Char('d') | KeyCode::Char('D') => {
-                    if matches!(app.phase, GamePhase::PlayerTurn) {
-                        let can_double = app.game_state.as_ref().map(|g| g.can_double()).unwrap_or(false);
-                        if can_double {
-                            let (spot, hand, num_hands, success, player_value) = if let Some(ref mut game) = app.game_state {
-                                let spot = game.active_spot;
-                                let hand = game.active_hand_in_spot;
-                                let num_hands = game.player_hands[spot].len();
-                                match game.double_down() {
-                                    Ok(_) => (spot + 1, hand + 1, num_hands, true, GameState::calculate_hand_value(&game.player_hands[spot][hand])),
-                                    Err(e) => {
-                                        app.add_log(format!("Error: {}", e));
-                                        (spot + 1, hand + 1, num_hands, false, 0)
-                                    }
-                                }
-                            } else {
-                                (0, 0, 1, false, 0)
-                            };
-
-                            if success {
-                                let hand_label = if num_hands > 1 {
-                                    format!("Spot {}.{}", spot, hand)
-                                } else {
-                                    format!("Spot {}", spot)
-                                };
-                                app.add_log(format!("{} doubles down!", hand_label));
-                                if player_value > 21 {
-                                    app.add_log(format!("{} busts with {}!", hand_label, player_value));
-                                }
-                                // Double down auto-stands, so move to next hand/spot
-                                if let Err(e) = app.move_to_next_spot_or_dealer() {
-                                    app.add_log(format!("Error: {}", e));
-                                }
-                            }
-                        } else {
-                            app.add_log("Cannot double down now".to_string());
-                        }
-                    }
-                }
-                KeyCode::Char('p') | KeyCode::Char('P') => {
-                    if matches!(app.phase, GamePhase::PlayerTurn) {
-                        let (split_result, spot, can_double) = if let Some(ref mut game) = app.game_state {
-                            if game.can_split() {
-                                let result = game.split();
-                                let spot = game.active_spot + 1;
-                                let can_double = game.can_double();
-                                (Some(result), spot, can_double)
-                            } else {
-                                (None, 0, false)
-                            }
-                        } else {
-                            (None, 0, false)
-                        };
-
-                        if let Some(result) = split_result {
-                            match result {
-                                Ok(_) => {
-                                    app.add_log(format!("Spot {} splits!", spot));
-                                    let can_surrender = app.game_state.as_ref().map(|g| g.can_surrender()).unwrap_or(false);
-                                    let mut options = vec!["[H]it", "[S]tand"];
-                                    if can_double { options.push("[D]ouble"); }
-                                    if can_surrender { options.push("Su[r]render"); }
-                                    app.status = format!("Spot {}.1/2: {}", spot, options.join(" or "));
-                                }
-                                Err(e) => {
-                                    app.add_log(format!("Error: {}", e));
-                                }
-                            }
-                        } else {
-                            app.add_log("Cannot split".to_string());
-                        }
-                    }
-                }
                 KeyCode::Char('l') | KeyCode::Char('L') => {
                     app.log_visible = !app.log_visible;
                 }
@@ -915,7 +1415,7 @@ where
                     // Arrow Up = Hit
                     if matches!(app.phase, GamePhase::PlayerTurn) {
                         if let Err(e) = app.player_hit() {
-                            app.add_log(format!("Error: {}", e));
+                            app.add_log(format!("Error: {e}"));
                         }
                     }
                 }
@@ -923,7 +1423,7 @@ where
                     // Arrow Down = Stand
                     if matches!(app.phase, GamePhase::PlayerTurn) {
                         if let Err(e) = app.player_stand() {
-                            app.add_log(format!("Error: {}", e));
+                            app.add_log(format!("Error: {e}"));
                         }
                     }
                 }
@@ -939,7 +1439,7 @@ where
                                 match game.double_down() {
                                     Ok(_) => (spot + 1, hand + 1, num_hands, true, GameState::calculate_hand_value(&game.player_hands[spot][hand])),
                                     Err(e) => {
-                                        app.add_log(format!("Error: {}", e));
+                                        app.add_log(format!("Error: {e}"));
                                         (spot + 1, hand + 1, num_hands, false, 0)
                                     }
                                 }
@@ -949,16 +1449,16 @@ where
 
                             if success {
                                 let hand_label = if num_hands > 1 {
-                                    format!("Spot {}.{}", spot, hand)
+                                    format!("Spot {spot}.{hand}")
                                 } else {
-                                    format!("Spot {}", spot)
+                                    format!("Spot {spot}")
                                 };
-                                app.add_log(format!("{} doubles down!", hand_label));
+                                app.add_log(format!("{hand_label} doubles down!"));
                                 if player_value > 21 {
-                                    app.add_log(format!("{} busts with {}!", hand_label, player_value));
+                                    app.add_log(format!("{hand_label} busts with {player_value}!"));
                                 }
                                 if let Err(e) = app.move_to_next_spot_or_dealer() {
-                                    app.add_log(format!("Error: {}", e));
+                                    app.add_log(format!("Error: {e}"));
                                 }
                             }
                         } else {
@@ -985,7 +1485,7 @@ where
                         if let Some(result) = split_result {
                             match result {
                                 Ok(_) => {
-                                    app.add_log(format!("Spot {} splits!", spot));
+                                    app.add_log(format!("Spot {spot} splits!"));
                                     let can_surrender = app.game_state.as_ref().map(|g| g.can_surrender()).unwrap_or(false);
                                     let mut options = vec!["[H]it", "[S]tand"];
                                     if can_double { options.push("[D]ouble"); }
@@ -993,11 +1493,70 @@ where
                                     app.status = format!("Spot {}.1/2: {}", spot, options.join(" or "));
                                 }
                                 Err(e) => {
-                                    app.add_log(format!("Error: {}", e));
+                                    app.add_log(format!("Error: {e}"));
                                 }
                             }
                         } else {
                             app.add_log("Cannot split".to_string());
+                        }
+                    }
+                }
+                KeyCode::Char(c) => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && app.contract_address.is_none() {
+                        // Typing contract address
+                        app.contract_address_input.push(c);
+                    }
+                }
+                KeyCode::Backspace => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && app.contract_address.is_none() {
+                        app.contract_address_input.pop();
+                    }
+                }
+                KeyCode::Enter => {
+                    #[cfg(feature = "wallet")]
+                    if app.phase == GamePhase::ContractSetup && app.wallet.is_some() && app.contract_address.is_none() && !app.contract_address_input.is_empty() {
+                        // Setting contract address
+                        let addr = app.contract_address_input.clone();
+                        app.contract_address = Some(addr.clone());
+                        app.add_log(format!("Contract address set: {addr}"));
+                        app.contract_address_input.clear();
+
+                        if app.is_dealer {
+                            app.add_log("Press [S] to start game (create game on-chain)".to_string());
+                            app.status = "Press [S] to create game".to_string();
+                        } else {
+                            // Player: query available games
+                            app.add_log("Querying available games...".to_string());
+                            let query_result = tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(app.query_list_games(Some("WaitingForPlayerJoin".to_string())))
+                            });
+                            match query_result {
+                                Ok(games) => {
+                                    if games.is_empty() {
+                                        app.add_log("No games available to join".to_string());
+                                        app.status = "No games available".to_string();
+                                    } else {
+                                        let game_count = games.len();
+                                        let game_list: Vec<_> = games.iter()
+                                            .enumerate()
+                                            .map(|(idx, game)| format!("  [{}] Game ID: {} - Dealer: {}", idx, game.game_id, game.dealer))
+                                            .collect();
+
+                                        app.available_games = games;
+                                        app.add_log(format!("Found {game_count} available games"));
+                                        for game_info in game_list {
+                                            app.add_log(game_info);
+                                        }
+                                        app.add_log("Press number key to select game, then [J] to join".to_string());
+                                        app.status = "Select game by number".to_string();
+                                    }
+                                }
+                                Err(e) => {
+                                    app.add_log(format!("Failed to query games: {e}"));
+                                }
+                            }
                         }
                     }
                 }
@@ -1078,7 +1637,7 @@ fn ui(f: &mut Frame, app: &App) {
                     Some('♠') => Color::Black,
                     _ => Color::White,
                 };
-                Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
+                Span::styled(format!("{card_str} "), Style::default().fg(color).bg(Color::Gray))
             })
             .collect()
     } else {
@@ -1162,7 +1721,7 @@ fn ui(f: &mut Frame, app: &App) {
     }
 
     let dealer_block = Paragraph::new(dealer_lines)
-        .block(Block::default().title(format!(" Dealer Hand{} ", dealer_value)).borders(Borders::ALL))
+        .block(Block::default().title(format!(" Dealer Hand{dealer_value} ")).borders(Borders::ALL))
         .alignment(Alignment::Center);
     f.render_widget(dealer_block, game_area[0]); // Dealer on top
 
@@ -1207,7 +1766,7 @@ fn ui(f: &mut Frame, app: &App) {
                                 Some('♠') => Color::Black,
                                 _ => Color::White,
                             };
-                            Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
+                            Span::styled(format!("{card_str} "), Style::default().fg(color).bg(Color::Gray))
                         })
                         .collect();
 
@@ -1273,7 +1832,7 @@ fn ui(f: &mut Frame, app: &App) {
                             Some('♠') => Color::Black,
                             _ => Color::White,
                         };
-                        Span::styled(format!("{} ", card_str), Style::default().fg(color).bg(Color::Gray))
+                        Span::styled(format!("{card_str} "), Style::default().fg(color).bg(Color::Gray))
                     })
                     .collect();
 
@@ -1359,7 +1918,21 @@ fn ui(f: &mut Frame, app: &App) {
     }
 
     // Status bar at bottom
-    let status_bar = Paragraph::new(app.status.as_str())
+    #[cfg(feature = "wallet")]
+    let status_text = if app.phase == GamePhase::ContractSetup {
+        if !app.contract_address_input.is_empty() {
+            format!("{} > {}", app.status, app.contract_address_input)
+        } else {
+            app.status.clone()
+        }
+    } else {
+        app.status.clone()
+    };
+
+    #[cfg(not(feature = "wallet"))]
+    let status_text = app.status.clone();
+
+    let status_bar = Paragraph::new(status_text.as_str())
         .style(Style::default().fg(Color::White))
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(status_bar, main_chunks[2]);

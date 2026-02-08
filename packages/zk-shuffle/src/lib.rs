@@ -43,7 +43,7 @@ mod tests {
         
         // Initial deck: 3 cards (represented by points)
         let g = Point::generator();
-        let cards = vec![g, (g.into_group() + g.into_group()).into_affine(), (g.into_group() + g.into_group() + g.into_group()).into_affine()];
+        let cards = [g, (g.into_group() + g.into_group()).into_affine(), (g.into_group() + g.into_group() + g.into_group()).into_affine()];
         
         let mut deck: Vec<crate::elgamal::Ciphertext> = cards.iter().map(|m| {
             let r = Fr::rand(&mut rng);
@@ -89,6 +89,6 @@ mod tests {
         );
         
         let ark_public_inputs = public_inputs.to_ark_public_inputs();
-        assert_eq!(ark_public_inputs.len(), 2 + 52 * 4 + 2 + 2);
+        assert_eq!(ark_public_inputs.len(), 1 + 2 + 52 * 4 + 2 + 2);
     }
 }

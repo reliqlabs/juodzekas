@@ -26,6 +26,7 @@ pub enum DoubleRestriction {
 
 #[cw_serde]
 pub struct Config {
+    pub denom: String,
     pub min_bet: Uint128,
     pub max_bet: Uint128,
     pub blackjack_payout: PayoutRatio,     // e.g., 3:2 or 6:5
@@ -51,7 +52,10 @@ pub enum TurnOwner {
 
 #[cw_serde]
 pub enum GameStatus {
-    WaitingForShuffle,
+    WaitingForPlayerJoin,
+    WaitingForDealerJoin,
+    WaitingForPlayerShuffle,
+    WaitingForDealerShuffle,
     WaitingForReveal {
         reveal_requests: Vec<u32>, // Indices of cards to be revealed
         next_status: Box<GameStatus>,
@@ -66,10 +70,12 @@ pub enum GameStatus {
 #[cw_serde]
 pub struct GameSession {
     pub player: Addr,
+    pub dealer: Addr,
     pub bet: Uint128,
     pub player_pubkey: Binary,
     pub dealer_pubkey: Binary,
     pub deck: Vec<Binary>, // Encrypted cards
+    pub player_shuffled_deck: Option<Vec<Binary>>, // Player's shuffle before dealer re-shuffles
     pub hands: Vec<Hand>,
     pub current_hand_index: u32,
     pub dealer_hand: Vec<u8>,
@@ -77,6 +83,7 @@ pub struct GameSession {
     pub current_turn: TurnOwner,
     pub last_action_timestamp: u64, // Timestamp of last action for timeout tracking
     pub last_card_index: u32,
+    pub pending_reveals: Vec<PendingReveal>, // Track partial decryptions from both parties
 }
 
 #[cw_serde]
@@ -96,5 +103,13 @@ pub enum HandStatus {
     Settled { winner: String },
 }
 
+#[cw_serde]
+pub struct PendingReveal {
+    pub card_index: u32,
+    pub player_partial: Option<Binary>,
+    pub dealer_partial: Option<Binary>,
+}
+
 pub const CONFIG: Item<Config> = Item::new("config");
-pub const GAMES: Map<&Addr, GameSession> = Map::new("games");
+pub const GAME_COUNTER: Item<u64> = Item::new("game_counter");
+pub const GAMES: Map<u64, GameSession> = Map::new("games");

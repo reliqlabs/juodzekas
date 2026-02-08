@@ -1,12 +1,12 @@
-/// Adapter to convert between TUI's crypto-focused GameState and blackjack package's GameState
-///
-/// TUI GameState: Contains encryption keys, shuffled deck, ZK proofs
-/// Blackjack GameState: Contains pure game logic (spots, hands, dealer, rules)
-///
-/// This module provides conversion functions to use blackjack package logic
-/// while maintaining TUI's cryptographic operations
+//! Adapter to convert between TUI's crypto-focused GameState and blackjack package's GameState
+//!
+//! TUI GameState: Contains encryption keys, shuffled deck, ZK proofs
+//! Blackjack GameState: Contains pure game logic (spots, hands, dealer, rules)
+//!
+//! This module provides conversion functions to use blackjack package logic
+//! while maintaining TUI's cryptographic operations
 
-use blackjack::{GameState as BlackjackState, Spot, Hand, Card, GameRules, TurnOwner, GamePhase};
+use blackjack::{GameState as BlackjackState, Spot, Hand, Card, TurnOwner, GamePhase};
 use crate::game::GameState as TuiGameState;
 
 impl TuiGameState {
@@ -24,10 +24,8 @@ impl TuiGameState {
 
                 let mut bj_hand = Hand::new();
                 // Only add revealed cards
-                for card_opt in tui_hand {
-                    if let Some(card) = card_opt {
-                        bj_hand.add_card(*card);
-                    }
+                for card in tui_hand.iter().flatten() {
+                    bj_hand.add_card(*card);
                 }
 
                 // Set hand flags
@@ -48,10 +46,8 @@ impl TuiGameState {
 
         // Convert dealer hand
         let mut dealer_hand: Vec<Card> = Vec::new();
-        for card_opt in &self.dealer_hand {
-            if let Some(card) = card_opt {
-                dealer_hand.push(*card);
-            }
+        for card in self.dealer_hand.iter().flatten() {
+            dealer_hand.push(*card);
         }
 
         // Determine current phase
@@ -82,7 +78,7 @@ impl TuiGameState {
             phase,
             current_turn,
             dealer_peeked: self.dealer_peeked,
-            rules: self.rules.clone(),
+            rules: self.rules,
             last_action_timestamp: None, // TUI doesn't track timestamps
         }
     }

@@ -25,8 +25,8 @@ async fn test_rapidsnark_shuffle_and_reveal() {
     let reveal_vkey = "../../circuits/artifacts/decrypt_vkey.json";
 
     println!("[TEST] Using rapidsnark/witnesscalc for proof generation");
-    println!("[TEST] Shuffle vkey: {}", shuffle_vkey);
-    println!("[TEST] Reveal vkey: {}", reveal_vkey);
+    println!("[TEST] Shuffle vkey: {shuffle_vkey}");
+    println!("[TEST] Reveal vkey: {reveal_vkey}");
 
     // 2. Generate key pairs for two users (Alice and Bob)
     let setup_start = Instant::now();
@@ -66,7 +66,7 @@ async fn test_rapidsnark_shuffle_and_reveal() {
     ) {
         Ok(proof) => proof,
         Err(e) => {
-            eprintln!("[ERROR] Failed to generate Alice's shuffle proof: {}", e);
+            eprintln!("[ERROR] Failed to generate Alice's shuffle proof: {e}");
             panic!("Proof generation failed");
         }
     };
@@ -83,7 +83,7 @@ async fn test_rapidsnark_shuffle_and_reveal() {
         },
         Ok(false) => panic!("[ERROR] Alice's Shuffle Proof verification returned false!"),
         Err(e) => {
-            eprintln!("[ERROR] Alice's Shuffle Proof verification failed: {:?}", e);
+            eprintln!("[ERROR] Alice's Shuffle Proof verification failed: {e:?}");
             panic!("Verification failed");
         }
     }
@@ -106,15 +106,13 @@ async fn test_rapidsnark_shuffle_and_reveal() {
 
     // 7. Reveal two cards with rapidsnark proofs
     let reveal_start = Instant::now();
-    for card_index in 0..2 {
-        let card_to_reveal = &deck[card_index];
-
+    for (card_index, card_to_reveal) in deck.iter().enumerate().take(2) {
         // Both parties provide partial decryptions
         let alice_reveal = reveal_card(&alice_keys.sk, card_to_reveal, &alice_keys.pk);
         let bob_reveal = reveal_card(&bob_keys.sk, card_to_reveal, &bob_keys.pk);
 
         // Verify Reveal ZK Proofs (using rapidsnark)
-        println!("[TEST] Generating Reveal Proofs for card {} with rapidsnark...", card_index);
+        println!("[TEST] Generating Reveal Proofs for card {card_index} with rapidsnark...");
         let reveal_proof_start = Instant::now();
         let alice_reveal_proof = generate_reveal_proof_rapidsnark(
             &alice_reveal.public_inputs,
@@ -134,7 +132,7 @@ async fn test_rapidsnark_shuffle_and_reveal() {
         let bob_verify = verify_reveal_proof_rapidsnark(reveal_vkey, &bob_reveal_proof, &bob_reveal.public_inputs).unwrap();
         assert!(bob_verify, "Bob's reveal proof verification failed");
         let reveal_proof_time = reveal_proof_start.elapsed();
-        println!("[TEST] Reveal Proofs for card {} verified. Time: {:.2}s", card_index, reveal_proof_time.as_secs_f64());
+        println!("[TEST] Reveal Proofs for card {card_index} verified. Time: {:.2}s", reveal_proof_time.as_secs_f64());
 
         // 8. Combine partial decryptions to get the card
         let combined_reveal = (alice_reveal.partial_decryption.into_group() + bob_reveal.partial_decryption.into_group()).into_affine();
@@ -145,9 +143,9 @@ async fn test_rapidsnark_shuffle_and_reveal() {
         let direct_decrypted = decrypt(&aggregated_sk, card_to_reveal);
 
         // 9. Verify the revealed card is one of the original cards
-        let found = cards.iter().any(|&c| c == revealed_card);
-        assert_eq!(revealed_card, direct_decrypted, "Reveal process mismatch for card {}!", card_index);
-        assert!(found, "Revealed card {} was not in the original deck!", card_index);
+        let found = cards.contains(&revealed_card);
+        assert_eq!(revealed_card, direct_decrypted, "Reveal process mismatch for card {card_index}!");
+        assert!(found, "Revealed card {card_index} was not in the original deck!");
     }
 
     let total_reveal_time = reveal_start.elapsed();

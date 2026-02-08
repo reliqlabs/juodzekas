@@ -1,5 +1,5 @@
 use blackjack::{Card, GameRules, GameState, Hand as BjHand, PayoutRatio, Spot, TurnOwner as BjTurnOwner, GamePhase};
-use crate::state::{GameSession, Hand, HandStatus, GameStatus, TurnOwner, Config};
+use crate::state::{GameSession, HandStatus, GameStatus, TurnOwner, Config};
 
 /// Convert contract GameSession to blackjack GameState for rule validation
 pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState {
@@ -37,12 +37,13 @@ pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState 
 
     // Determine phase
     let phase = match &session.status {
-        GameStatus::WaitingForShuffle => GamePhase::NotStarted,
+        GameStatus::WaitingForPlayerJoin | GameStatus::WaitingForDealerJoin => GamePhase::NotStarted,
+        GameStatus::WaitingForPlayerShuffle | GameStatus::WaitingForDealerShuffle => GamePhase::NotStarted,
         GameStatus::WaitingForReveal { .. } if session.dealer_hand.is_empty() => GamePhase::InitialDeal,
+        GameStatus::WaitingForReveal { .. } => GamePhase::DealerTurn, // Card reveals during game
         GameStatus::PlayerTurn => GamePhase::PlayerTurn,
         GameStatus::DealerTurn => GamePhase::DealerTurn,
         GameStatus::Settled { .. } => GamePhase::Settled,
-        _ => GamePhase::NotStarted,
     };
 
     // Convert turn owner
@@ -176,6 +177,7 @@ mod tests {
     #[test]
     fn test_config_to_rules_three_to_two() {
         let config = Config {
+            denom: "utoken".to_string(),
             min_bet: Uint128::new(100),
             max_bet: Uint128::new(1000),
             blackjack_payout: crate::state::PayoutRatio { numerator: 3, denominator: 2 },
@@ -204,21 +206,24 @@ mod tests {
     fn test_to_blackjack_state_basic() {
         let session = GameSession {
             player: Addr::unchecked("player"),
+            dealer: Addr::unchecked("dealer"),
             bet: Uint128::new(100),
             player_pubkey: Binary::default(),
             dealer_pubkey: Binary::default(),
             deck: vec![],
-            hands: vec![Hand {
-                cards: vec![1, 23], // Ace of Spades, Ten of Hearts
+            player_shuffled_deck: None,
+            hands: vec![crate::state::Hand {
+                cards: vec![1, 23], // Two of Spades, King of Hearts
                 bet: Uint128::new(100),
                 status: HandStatus::Active,
             }],
             current_hand_index: 0,
-            dealer_hand: vec![10], // Ten of Spades
+            dealer_hand: vec![10], // Jack of Spades
             status: GameStatus::PlayerTurn,
             current_turn: TurnOwner::Player,
             last_action_timestamp: 1000,
             last_card_index: 2,
+            pending_reveals: vec![],
         };
 
         let rules = GameRules::default();
