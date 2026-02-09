@@ -267,6 +267,7 @@ async fn test_two_party_with_real_zk_proofs() {
             surrender_allowed: true,
             shuffle_vk_id: "test_shuffle".to_string(),
             reveal_vk_id: "test_reveal".to_string(),
+            timeout_seconds: None,
         },
         &[],
         "juodzekas",

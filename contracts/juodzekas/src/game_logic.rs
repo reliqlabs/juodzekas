@@ -192,6 +192,7 @@ mod tests {
             surrender_allowed: true,
             shuffle_vk_id: "test".to_string(),
             reveal_vk_id: "test".to_string(),
+            timeout_seconds: 3600,
         };
 
         let rules = config_to_rules(&config);

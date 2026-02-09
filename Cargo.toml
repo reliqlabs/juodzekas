@@ -1,11 +1,9 @@
 [workspace]
 members = [
     "contracts/juodzekas",
-    "clients/tui",
+#    "clients/tui",
+#    "clients/dealer",
     "packages/zk-shuffle",
     "packages/blackjack",
 ]
 resolver = "2"
-
-[patch."https://github.com/burnt-labs/mob"]
-xion-types = { git = "https://github.com/burnt-labs/xion-types" }

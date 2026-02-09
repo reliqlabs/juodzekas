@@ -155,10 +155,11 @@ fn test_testnet_zk_game_flow() -> anyhow::Result<()> {
     let required_bankroll = config.max_bet.u128() * 10;
     
     let create_tx = dealer_client.execute_contract(
-        contract_addr.clone(), 
-        create_msg_bytes, 
-        vec![mob::Coin::new(config.denom.clone(), required_bankroll.to_string())], 
-        None
+        contract_addr.clone(),
+        create_msg_bytes,
+        vec![mob::Coin::new(config.denom.clone(), required_bankroll.to_string())],
+        None,
+        Some(800_000),
     ).map_err(|e| anyhow::anyhow!("CreateGame TX error: {e}"))?;
     println!("CreateGame TX: {}", create_tx.txhash);
 
@@ -236,10 +237,11 @@ fn test_testnet_zk_game_flow() -> anyhow::Result<()> {
     println!("Player: Sending JoinGame...");
     let join_msg_bytes = serde_json_wasm::to_vec(&join_msg)?;
     let join_tx = player_client.execute_contract(
-        contract_addr.clone(), 
-        join_msg_bytes, 
-        vec![mob::Coin::new("uxion".to_string(), 1000u128.to_string())], 
-        None
+        contract_addr.clone(),
+        join_msg_bytes,
+        vec![mob::Coin::new("uxion".to_string(), 1000u128.to_string())],
+        None,
+        Some(800_000),
     ).map_err(|e| anyhow::anyhow!("JoinGame TX error: {e}"))?;
     println!("JoinGame TX: {}", join_tx.txhash);
 
@@ -280,7 +282,7 @@ fn test_testnet_zk_game_flow() -> anyhow::Result<()> {
                 public_inputs: dealer_reveal.public_inputs.to_ark_public_inputs()
                     .iter().map(|f| f.into_bigint().to_string()).collect(),
             };
-            dealer_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_dealer)?, vec![], None)?;
+            dealer_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_dealer)?, vec![], None, None)?;
 
             // Player reveals
             let player_reveal = reveal_card(&player_keys.sk, &ciphertext, &player_keys.pk);
@@ -298,7 +300,7 @@ fn test_testnet_zk_game_flow() -> anyhow::Result<()> {
                 public_inputs: player_reveal.public_inputs.to_ark_public_inputs()
                     .iter().map(|f| f.into_bigint().to_string()).collect(),
             };
-            player_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_player)?, vec![], None)?;
+            player_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_player)?, vec![], None, None)?;
 
             println!("Card {card_idx} revealed");
             std::thread::sleep(std::time::Duration::from_secs(4));

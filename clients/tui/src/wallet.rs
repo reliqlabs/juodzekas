@@ -93,6 +93,21 @@ impl Wallet {
     pub fn client(&self) -> Option<&Client> {
         self.client.as_ref()
     }
+
+    /// Take the client out (for handing to a background thread).
+    pub fn take_client(&mut self) -> Option<Client> {
+        self.client.take()
+    }
+
+    /// Return the client after a background thread is done with it.
+    pub fn set_client(&mut self, client: Client) {
+        self.client = Some(client);
+    }
+
+    /// Get a clone of the signer Arc.
+    pub fn signer(&self) -> Arc<RustSigner> {
+        Arc::clone(&self.signer)
+    }
 }
 
 #[cfg(test)]

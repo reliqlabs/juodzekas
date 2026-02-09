@@ -273,14 +273,14 @@ pub fn generate_shuffle_proof_rapidsnark(
     // Load WASM witness calculator
     // Try multiple possible paths (depending on where code is run from)
     let possible_paths = [
-        "circuits/artifacts/shuffle_encrypt_js/shuffle_encrypt.wasm",
-        "../../circuits/artifacts/shuffle_encrypt_js/shuffle_encrypt.wasm",
-        "../../../circuits/artifacts/shuffle_encrypt_js/shuffle_encrypt.wasm",
+        "circuits/circuit-artifacts/wasm/encrypt.wasm",
+        "../../circuits/circuit-artifacts/wasm/encrypt.wasm",
+        "../../../circuits/circuit-artifacts/wasm/encrypt.wasm",
     ];
 
     let wasm_path = possible_paths.iter()
         .find(|p| std::path::Path::new(p).exists())
-        .ok_or("Could not find shuffle_encrypt.wasm in any expected location")?;
+        .ok_or("Could not find encrypt.wasm in any expected location")?;
 
     let mut store = wasmer::Store::default();
     let mut calculator = WitnessCalculator::new(&mut store, wasm_path)?;
@@ -315,14 +315,14 @@ pub fn generate_shuffle_proof_rapidsnark(
 
     // Use rapidsnark for FAST proof generation
     let possible_zkey_paths = [
-        "circuits/artifacts/shuffle_encrypt.zkey",
-        "../../circuits/artifacts/shuffle_encrypt.zkey",
-        "../../../circuits/artifacts/shuffle_encrypt.zkey",
+        "circuits/circuit-artifacts/zkey/encrypt.zkey",
+        "../../circuits/circuit-artifacts/zkey/encrypt.zkey",
+        "../../../circuits/circuit-artifacts/zkey/encrypt.zkey",
     ];
 
     let zkey_path = possible_zkey_paths.iter()
         .find(|p| std::path::Path::new(p).exists())
-        .ok_or("Could not find shuffle_encrypt.zkey in any expected location")?;
+        .ok_or("Could not find encrypt.zkey in any expected location")?;
 
     log::info!("Using zkey: {zkey_path}");
     let rapidsnark_result = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
@@ -378,9 +378,9 @@ pub fn generate_reveal_proof_rapidsnark(
     // Load WASM witness calculator
     // Try multiple possible paths (depending on where code is run from)
     let possible_paths = [
-        "circuits/artifacts/decrypt_js/decrypt.wasm",
-        "../../circuits/artifacts/decrypt_js/decrypt.wasm",
-        "../../../circuits/artifacts/decrypt_js/decrypt.wasm",
+        "circuits/circuit-artifacts/wasm/decrypt.wasm",
+        "../../circuits/circuit-artifacts/wasm/decrypt.wasm",
+        "../../../circuits/circuit-artifacts/wasm/decrypt.wasm",
     ];
 
     let wasm_path = possible_paths.iter()
@@ -412,9 +412,9 @@ pub fn generate_reveal_proof_rapidsnark(
 
     // Use rapidsnark for FAST proof generation
     let possible_zkey_paths = [
-        "circuits/artifacts/decrypt.zkey",
-        "../../circuits/artifacts/decrypt.zkey",
-        "../../../circuits/artifacts/decrypt.zkey",
+        "circuits/circuit-artifacts/zkey/decrypt.zkey",
+        "../../circuits/circuit-artifacts/zkey/decrypt.zkey",
+        "../../../circuits/circuit-artifacts/zkey/decrypt.zkey",
     ];
 
     let zkey_path = possible_zkey_paths.iter()

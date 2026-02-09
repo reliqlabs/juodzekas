@@ -1,5 +1,5 @@
 use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdResult};
-use crate::msg::{GameListItem, GameResponse, QueryMsg};
+use crate::msg::{GameListItem, GameResponse, PendingRevealResponse, QueryMsg};
 use crate::state::{Config, CONFIG, GAMES};
 
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
@@ -28,6 +28,16 @@ fn query_game(deps: Deps, game_id: u64) -> StdResult<GameResponse> {
         })
         .collect();
 
+    let pending_reveals = game
+        .pending_reveals
+        .into_iter()
+        .map(|pr| PendingRevealResponse {
+            card_index: pr.card_index,
+            player_partial: pr.player_partial,
+            dealer_partial: pr.dealer_partial,
+        })
+        .collect();
+
     Ok(GameResponse {
         player: game.player.to_string(),
         dealer: game.dealer.to_string(),
@@ -39,6 +49,7 @@ fn query_game(deps: Deps, game_id: u64) -> StdResult<GameResponse> {
         dealer_pubkey: game.dealer_pubkey,
         deck: game.deck,
         player_shuffled_deck: game.player_shuffled_deck,
+        pending_reveals,
     })
 }
 

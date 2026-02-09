@@ -41,6 +41,7 @@ pub struct Config {
     pub surrender_allowed: bool,
     pub shuffle_vk_id: String,
     pub reveal_vk_id: String,
+    pub timeout_seconds: u64,
 }
 
 #[cw_serde]

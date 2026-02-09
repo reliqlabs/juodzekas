@@ -39,6 +39,7 @@ pub fn execute(
             public_inputs,
         } => execute_submit_reveal(deps, _env, info, game_id, card_index, partial_decryption, proof, public_inputs),
         ExecuteMsg::ClaimTimeout { game_id } => execute_claim_timeout(deps, _env, info, game_id),
+        ExecuteMsg::SweepSettled { game_ids } => execute_sweep_settled(deps, _env, game_ids),
     }
 }
 
@@ -376,17 +377,15 @@ use super::reveal::execute_submit_reveal;
 
 pub fn execute_claim_timeout(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
-    let game = GAMES.load(deps.storage, game_id)?;
-
-    // Define timeout threshold (e.g., 5 minutes = 300 seconds)
-    const TIMEOUT_SECONDS: u64 = 300;
+    let mut game = GAMES.load(deps.storage, game_id)?;
 
     let current_time = env.block.time.seconds();
     let time_elapsed = current_time.saturating_sub(game.last_action_timestamp);
 
-    if time_elapsed < TIMEOUT_SECONDS {
+    let timeout = config.timeout_seconds;
+    if time_elapsed < timeout {
         return Err(ContractError::Std(StdError::msg(format!(
-            "Timeout not reached. Elapsed: {time_elapsed}s, Required: {TIMEOUT_SECONDS}s"
+            "Timeout not reached. Elapsed: {time_elapsed}s, Required: {timeout}s"
         ))));
     }
 
@@ -410,8 +409,10 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, info: MessageInfo, game_id
         }
     };
 
-    // Remove game from storage
-    GAMES.remove(deps.storage, game_id);
+    // Mark game as settled instead of removing
+    game.status = GameStatus::Settled { winner: winner.to_string() };
+    game.last_action_timestamp = current_time;
+    GAMES.save(deps.storage, game_id, &game)?;
 
     // Build response with refund if player wins
     let mut response = Response::new()
@@ -430,4 +431,29 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, info: MessageInfo, game_id
     }
 
     Ok(response)
+}
+
+pub fn execute_sweep_settled(deps: DepsMut, env: Env, game_ids: Vec<u64>) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    let now = env.block.time.seconds();
+    let mut removed = 0u64;
+
+    for game_id in &game_ids {
+        let game = match GAMES.may_load(deps.storage, *game_id)? {
+            Some(g) => g,
+            None => continue,
+        };
+        if !matches!(game.status, GameStatus::Settled { .. }) {
+            continue;
+        }
+        if game.last_action_timestamp + config.timeout_seconds > now {
+            continue;
+        }
+        GAMES.remove(deps.storage, *game_id);
+        removed += 1;
+    }
+
+    Ok(Response::new()
+        .add_attribute("action", "sweep_settled")
+        .add_attribute("removed", removed.to_string()))
 }

@@ -29,6 +29,7 @@ pub fn instantiate(
         surrender_allowed: msg.surrender_allowed,
         shuffle_vk_id: msg.shuffle_vk_id.clone(),
         reveal_vk_id: msg.reveal_vk_id.clone(),
+        timeout_seconds: msg.timeout_seconds.unwrap_or(3600),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG.save(deps.storage, &config)?;

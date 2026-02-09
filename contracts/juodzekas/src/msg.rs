@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
 
-use crate::state::{Config, DoubleRestriction, PayoutRatio};
+pub use crate::state::{Config, DoubleRestriction, PayoutRatio};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -20,6 +20,8 @@ pub struct InstantiateMsg {
     pub surrender_allowed: bool,
     pub shuffle_vk_id: String,
     pub reveal_vk_id: String,
+    /// Timeout in seconds for inactivity claims and settled game cleanup. Defaults to 3600 (1 hour).
+    pub timeout_seconds: Option<u64>,
 }
 
 #[cw_serde]
@@ -56,6 +58,8 @@ pub enum ExecuteMsg {
     },
     // Timeout claim: if opponent doesn't act, claim funds
     ClaimTimeout { game_id: u64 },
+    // Permissionless cleanup of settled games past timeout
+    SweepSettled { game_ids: Vec<u64> },
 }
 
 #[cw_serde]
@@ -70,6 +74,13 @@ pub enum QueryMsg {
 }
 
 #[cw_serde]
+pub struct PendingRevealResponse {
+    pub card_index: u32,
+    pub player_partial: Option<Binary>,
+    pub dealer_partial: Option<Binary>,
+}
+
+#[cw_serde]
 pub struct GameResponse {
     pub player: String,
     pub dealer: String,
@@ -81,6 +92,7 @@ pub struct GameResponse {
     pub dealer_pubkey: Binary,
     pub deck: Vec<Binary>,
     pub player_shuffled_deck: Option<Vec<Binary>>,
+    pub pending_reveals: Vec<PendingRevealResponse>,
 }
 
 #[cw_serde]

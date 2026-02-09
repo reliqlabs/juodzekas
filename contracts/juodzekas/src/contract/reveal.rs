@@ -99,7 +99,8 @@ pub fn execute_submit_reveal(
         let card_value = (player_bytes[0] ^ dealer_bytes[0]) % 52;
 
         // Add card to appropriate hand/dealer based on card_index
-        add_card_to_game(&mut game, card_index, card_value)?;
+        let for_dealer = matches!(*next_status, GameStatus::DealerTurn);
+        add_card_to_game(&mut game, card_index, card_value, for_dealer)?;
 
         // Remove this card from reveal_requests
         let remaining_requests: Vec<u32> = reveal_requests
@@ -111,7 +112,7 @@ pub fn execute_submit_reveal(
         // Update game status
         if remaining_requests.is_empty() {
             // All cards revealed, transition to next status
-            game.status = determine_next_status(&game, &next_status, &config)?;
+            game.status = determine_next_status(&mut game, &next_status, &config)?;
         } else {
             // Still waiting for more reveals
             game.status = GameStatus::WaitingForReveal {
@@ -132,11 +133,8 @@ pub fn execute_submit_reveal(
 
         if matches!(game.status, GameStatus::Settled { .. }) {
             response = execute_payouts(&game, &config, response)?;
-            // Remove game after settlement
-            GAMES.remove(deps.storage, game_id);
-        } else {
-            GAMES.save(deps.storage, game_id, &game)?;
         }
+        GAMES.save(deps.storage, game_id, &game)?;
 
         Ok(response)
     } else {
@@ -155,7 +153,7 @@ pub fn execute_submit_reveal(
 }
 
 /// Add revealed card to the appropriate hand
-fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8) -> Result<(), ContractError> {
+fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8, for_dealer: bool) -> Result<(), ContractError> {
     // Initial deal: cards 0-1 go to player, cards 2-3 go to dealer
     if card_index < 2 {
         if game.hands.is_empty() {
@@ -164,11 +162,11 @@ fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8) -> 
         game.hands[0].cards.push(card_value);
     } else if card_index == 2 || card_index == 3 {
         game.dealer_hand.push(card_value);
+    } else if for_dealer {
+        // Dealer hit cards
+        game.dealer_hand.push(card_value);
     } else {
-        // Additional cards during gameplay
-        // For Hit/DoubleDown: add to current hand
-        // For Split: need to track which hand each card belongs to
-        // Simplified: add to current hand
+        // Player hit/double/split cards
         let hand_idx = game.current_hand_index as usize;
         if hand_idx >= game.hands.len() {
             return Err(ContractError::Std(StdError::msg("Invalid hand index")));
@@ -180,7 +178,7 @@ fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8) -> 
 
 /// Determine the next game status after all reveals complete
 fn determine_next_status(
-    game: &GameSession,
+    game: &mut GameSession,
     next_status: &GameStatus,
     config: &crate::state::Config,
 ) -> Result<GameStatus, ContractError> {
@@ -234,9 +232,11 @@ fn determine_next_status(
 
             // Check if dealer needs to hit
             if d_score < 17 {
-                // Dealer must hit
+                // Dealer must hit — allocate next card index
+                let card_to_reveal = game.last_card_index;
+                game.last_card_index += 1;
                 Ok(GameStatus::WaitingForReveal {
-                    reveal_requests: vec![game.last_card_index],
+                    reveal_requests: vec![card_to_reveal],
                     next_status: Box::new(GameStatus::DealerTurn),
                 })
             } else if d_score == 17 && config.dealer_hits_soft_17 {
@@ -255,9 +255,11 @@ fn determine_next_status(
                     }
                 }
                 if aces > 0 && score == 17 {
-                    // Soft 17, dealer hits
+                    // Soft 17, dealer hits — allocate next card index
+                    let card_to_reveal = game.last_card_index;
+                    game.last_card_index += 1;
                     Ok(GameStatus::WaitingForReveal {
-                        reveal_requests: vec![game.last_card_index],
+                        reveal_requests: vec![card_to_reveal],
                         next_status: Box::new(GameStatus::DealerTurn),
                     })
                 } else {
