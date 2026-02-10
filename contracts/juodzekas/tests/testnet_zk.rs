@@ -293,7 +293,6 @@ fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
     let tx = player_client.execute_contract(
         contract_addr.clone(),
         serde_json_wasm::to_vec(&ExecuteMsg::JoinGame {
-            game_id,
             bet: Uint128::new(1000),
             public_key: serialize_ark(&player_keys.pk),
             shuffled_deck: player_shuffle.deck.iter().map(serialize_ciphertext).collect(),
@@ -341,7 +340,7 @@ fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let dealer_bal: DealerBalanceResponse = query_contract(
                 &dealer_client, &contract_addr,
-                &QueryMsg::GetDealerBalance { address: dealer_signer.address() },
+                &QueryMsg::GetDealerBalance {},
             )?;
             println!("Dealer balance after settlement: {}", dealer_bal.balance);
             assert!(!dealer_bal.balance.is_zero(), "Dealer should have balance after settlement");
@@ -360,7 +359,7 @@ fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let dealer_bal: DealerBalanceResponse = query_contract(
                 &dealer_client, &contract_addr,
-                &QueryMsg::GetDealerBalance { address: dealer_signer.address() },
+                &QueryMsg::GetDealerBalance {},
             )?;
             assert!(dealer_bal.balance.is_zero(), "Dealer balance should be zero after withdrawal");
 

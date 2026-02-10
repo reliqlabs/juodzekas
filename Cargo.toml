@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "contracts/juodzekas",
-#    "clients/tui",
-#    "clients/dealer",
+    "clients/tui",
+    "clients/dealer",
     "packages/zk-shuffle",
     "packages/blackjack",
 ]

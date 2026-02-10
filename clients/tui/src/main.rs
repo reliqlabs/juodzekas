@@ -753,7 +753,6 @@ impl App {
 
                 let msg_json = serde_json::json!({
                     "join_game": {
-                        "game_id": game_id,
                         "bet": bet_amount.to_string(),
                         "public_key": general_purpose::STANDARD.encode(serialize_point(&player_keys.pk)),
                         "shuffled_deck": player_shuffle.deck.iter().map(|ct| general_purpose::STANDARD.encode(serialize_ciphertext(ct))).collect::<Vec<_>>(),

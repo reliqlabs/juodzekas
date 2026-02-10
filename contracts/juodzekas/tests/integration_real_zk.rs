@@ -451,7 +451,6 @@ async fn test_two_party_with_real_zk_proofs() {
         player.clone(),
         contract_addr.clone(),
         &ExecuteMsg::JoinGame {
-            game_id,
             bet: Uint128::new(1000),
             public_key: player_pk_binary,
             shuffled_deck: player_shuffled_deck_binary,

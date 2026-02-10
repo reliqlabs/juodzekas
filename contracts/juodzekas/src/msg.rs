@@ -34,8 +34,8 @@ pub enum ExecuteMsg {
         public_inputs: Vec<String>,
     },
     // Phase 2: Player joins with bet, public key, re-shuffle + proof
+    // Auto-finds the first WaitingForPlayerJoin game
     JoinGame {
-        game_id: u64,
         bet: Uint128,
         public_key: Binary,
         shuffled_deck: Vec<Binary>,
@@ -58,8 +58,12 @@ pub enum ExecuteMsg {
     },
     // Timeout claim: if opponent doesn't act, claim funds
     ClaimTimeout { game_id: u64 },
+    // Cancel an unjoined game and return bankroll
+    CancelGame { game_id: u64 },
     // Permissionless cleanup of settled games past timeout
     SweepSettled { game_ids: Vec<u64> },
+    // Deposit additional bankroll
+    DepositBankroll {},
     // Withdraw dealer bankroll balance
     WithdrawBankroll { amount: Option<Uint128> },
 }
@@ -74,7 +78,9 @@ pub enum QueryMsg {
     #[returns(Vec<GameListItem>)]
     ListGames { status_filter: Option<String> },
     #[returns(DealerBalanceResponse)]
-    GetDealerBalance { address: String },
+    GetDealerBalance {},
+    #[returns(DealerResponse)]
+    GetDealer {},
 }
 
 #[cw_serde]
@@ -109,6 +115,11 @@ pub struct HandResponse {
 #[cw_serde]
 pub struct DealerBalanceResponse {
     pub balance: Uint128,
+}
+
+#[cw_serde]
+pub struct DealerResponse {
+    pub dealer: String,
 }
 
 #[cw_serde]

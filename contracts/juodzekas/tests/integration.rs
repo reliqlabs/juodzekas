@@ -199,7 +199,6 @@ fn test_two_party_basic_game() {
         player.clone(),
         contract_addr.clone(),
         &ExecuteMsg::JoinGame {
-            game_id,
             bet: Uint128::new(1000),
             public_key: Binary::from(b"player_pubkey"),
             shuffled_deck: game.player_shuffled_deck(),
@@ -390,7 +389,6 @@ fn test_two_party_player_busts() {
         player.clone(),
         contract_addr.clone(),
         &ExecuteMsg::JoinGame {
-            game_id,
             bet: Uint128::new(500),
             public_key: Binary::from(b"player_pubkey"),
             shuffled_deck: game.player_shuffled_deck(),
@@ -471,33 +469,7 @@ fn test_two_party_player_busts() {
         &[],
     ).unwrap();
 
-    // Reveal dealer's hole card to settle
-    app.execute_contract(
-        player.clone(),
-        contract_addr.clone(),
-        &ExecuteMsg::SubmitReveal {
-            game_id,
-            card_index: 3,
-            partial_decryption: game.player_partial(3),
-            proof: Binary::from(b"player_reveal_3"),
-            public_inputs: vec![],
-        },
-        &[],
-    ).unwrap();
-
-    app.execute_contract(
-        dealer.clone(),
-        contract_addr.clone(),
-        &ExecuteMsg::SubmitReveal {
-            game_id,
-            card_index: 3,
-            partial_decryption: game.dealer_partial(3, 9),
-            proof: Binary::from(b"dealer_reveal_3"),
-            public_inputs: vec![],
-        },
-        &[],
-    ).unwrap();
-
+    // All hands busted → game settles immediately, no dealer hole card reveal needed.
     // Balance verification disabled: cw-multi-test v3.0.1 doesn't support cosmwasm-std v3.0.2 Uint256 amounts
     // The game settled correctly as verified by the status check above
 }

@@ -115,4 +115,5 @@ pub struct PendingReveal {
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const GAME_COUNTER: Item<u64> = Item::new("game_counter");
 pub const GAMES: Map<u64, GameSession> = Map::new("games");
-pub const DEALER_BALANCES: Map<&Addr, Uint128> = Map::new("dealer_balances");
+pub const DEALER: Item<Addr> = Item::new("dealer");
+pub const DEALER_BALANCE: Item<Uint128> = Item::new("dealer_balance");
