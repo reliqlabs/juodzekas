@@ -8,6 +8,7 @@ This is a Rust workspace consisting of multiple components:
 
 - `contracts/juodzekas`: The CosmWasm smart contract (WIP)
 - `clients/tui`: A terminal-based user interface for playing the game
+- `clients/dealer`: A simple daemon for automatically dealing cards against a smart contract
 - `packages/zk-shuffle`: ZK-based card shuffling using Mental Poker
 - `packages/blackjack`: Shared blackjack game logic and rules
 

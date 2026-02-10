@@ -6,4 +6,8 @@ members = [
     "packages/zk-shuffle",
     "packages/blackjack",
 ]
+exclude = [
+    "clients/tui",
+    "clients/dealer",
+]
 resolver = "2"

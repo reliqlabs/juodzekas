@@ -73,6 +73,7 @@ pub struct GameSession {
     pub player: Addr,
     pub dealer: Addr,
     pub bet: Uint128,
+    pub bankroll: Uint128,
     pub player_pubkey: Binary,
     pub dealer_pubkey: Binary,
     pub deck: Vec<Binary>, // Encrypted cards
@@ -114,3 +115,4 @@ pub struct PendingReveal {
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const GAME_COUNTER: Item<u64> = Item::new("game_counter");
 pub const GAMES: Map<u64, GameSession> = Map::new("games");
+pub const DEALER_BALANCES: Map<&Addr, Uint128> = Map::new("dealer_balances");

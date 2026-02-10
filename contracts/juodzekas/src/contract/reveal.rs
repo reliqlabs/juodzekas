@@ -1,6 +1,6 @@
-use cosmwasm_std::{BankMsg, Binary, Coin, DepsMut, Env, MessageInfo, Response, StdError, Uint128};
+use cosmwasm_std::{BankMsg, Binary, Coin, DepsMut, Env, MessageInfo, Response, StdError, Storage, Uint128};
 use crate::error::ContractError;
-use crate::state::{GameSession, GameStatus, HandStatus, PendingReveal, CONFIG, GAMES};
+use crate::state::{GameSession, GameStatus, HandStatus, PendingReveal, CONFIG, DEALER_BALANCES, GAMES};
 use crate::zk::xion_zk_verify;
 
 /// Handle submission of partial decryption from player or dealer
@@ -132,7 +132,7 @@ pub fn execute_submit_reveal(
             .add_attribute("both_revealed", "true");
 
         if matches!(game.status, GameStatus::Settled { .. }) {
-            response = execute_payouts(&game, &config, response)?;
+            response = execute_payouts(deps.storage, &game, &config, response)?;
         }
         GAMES.save(deps.storage, game_id, &game)?;
 
@@ -278,17 +278,17 @@ fn determine_next_status(
 }
 
 /// Settle the game and determine winners
-fn settle_game(game: &GameSession, d_score: u8) -> Result<GameStatus, ContractError> {
+fn settle_game(game: &mut GameSession, d_score: u8) -> Result<GameStatus, ContractError> {
     let mut results = vec![];
 
-    for hand in &game.hands {
+    for hand in &mut game.hands {
         let result = match hand.status {
-            HandStatus::Busted => "Dealer",
-            HandStatus::Surrendered => "Surrendered",
-            HandStatus::Settled { ref winner } => winner.as_str(),
+            HandStatus::Busted => "Dealer".to_string(),
+            HandStatus::Surrendered => "Surrendered".to_string(),
+            HandStatus::Settled { ref winner } => winner.clone(),
             _ => {
                 let p_score = crate::contract::calculate_score(&hand.cards);
-                if d_score > 21 {
+                let r = if d_score > 21 {
                     "Player"
                 } else if p_score > d_score {
                     if p_score == 21 && hand.cards.len() == 2 {
@@ -307,10 +307,12 @@ fn settle_game(game: &GameSession, d_score: u8) -> Result<GameStatus, ContractEr
                     } else {
                         "Push"
                     }
-                }
+                };
+                r.to_string()
             }
         };
-        results.push(result.to_string());
+        hand.status = HandStatus::Settled { winner: result.clone() };
+        results.push(result);
     }
 
     Ok(GameStatus::Settled {
@@ -320,11 +322,13 @@ fn settle_game(game: &GameSession, d_score: u8) -> Result<GameStatus, ContractEr
 
 /// Execute payouts based on game results
 fn execute_payouts(
+    storage: &mut dyn Storage,
     game: &GameSession,
     config: &crate::state::Config,
     mut response: Response,
 ) -> Result<Response, ContractError> {
     let mut player_winnings = Uint128::zero();
+    let total_player_bets: Uint128 = game.hands.iter().map(|h| h.bet).sum();
 
     for hand in &game.hands {
         let winner = match &hand.status {
@@ -364,19 +368,31 @@ fn execute_payouts(
         }
     }
 
+    // Credit dealer: bankroll + total player bets - player winnings
+    let dealer_credit = game.bankroll
+        .checked_add(total_player_bets).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_sub(player_winnings).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+    let mut dealer_balance = DEALER_BALANCES
+        .may_load(storage, &game.dealer)?
+        .unwrap_or(Uint128::zero());
+    dealer_balance = dealer_balance.checked_add(dealer_credit)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+    DEALER_BALANCES.save(storage, &game.dealer, &dealer_balance)?;
+
     // Send winnings to player if any
     if player_winnings > Uint128::zero() {
         response = response.add_message(BankMsg::Send {
             to_address: game.player.to_string(),
             amount: vec![Coin {
                 denom: config.denom.clone(),
-                amount: cosmwasm_std::Uint256::from(player_winnings),
+                amount: player_winnings.into(),
             }],
         });
     }
 
     response = response
         .add_attribute("player_winnings", player_winnings.to_string())
+        .add_attribute("dealer_credit", dealer_credit.to_string())
         .add_attribute("game_settled", "true");
 
     Ok(response)

@@ -20,21 +20,6 @@ struct ProofVerifyResponse {
 struct ZkMockStargate;
 
 impl Stargate for ZkMockStargate {
-    fn query_stargate(
-        &self,
-        _api: &dyn cosmwasm_std::Api,
-        _storage: &dyn cosmwasm_std::Storage,
-        _querier: &dyn cosmwasm_std::Querier,
-        _block: &cosmwasm_std::BlockInfo,
-        _path: String,
-        _data: Binary,
-    ) -> cosmwasm_std::StdResult<Binary> {
-        let response = ProofVerifyResponse { verified: true };
-        let mut buf = Vec::new();
-        response.encode(&mut buf).unwrap();
-        Ok(Binary::from(buf))
-    }
-
     fn execute_stargate<ExecC, QueryC>(
         &self,
         _api: &dyn cosmwasm_std::Api,
@@ -50,6 +35,21 @@ impl Stargate for ZkMockStargate {
         QueryC: cosmwasm_std::CustomQuery + serde::de::DeserializeOwned + 'static,
     {
         Ok(cw_multi_test::AppResponse::default())
+    }
+
+    fn query_stargate(
+        &self,
+        _api: &dyn cosmwasm_std::Api,
+        _storage: &dyn cosmwasm_std::Storage,
+        _querier: &dyn cosmwasm_std::Querier,
+        _block: &cosmwasm_std::BlockInfo,
+        _path: String,
+        _data: Binary,
+    ) -> cosmwasm_std::StdResult<Binary> {
+        let response = ProofVerifyResponse { verified: true };
+        let mut buf = Vec::new();
+        response.encode(&mut buf).unwrap();
+        Ok(Binary::from(buf))
     }
 
     fn execute_any<ExecC, QueryC>(

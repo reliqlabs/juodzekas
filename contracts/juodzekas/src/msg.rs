@@ -60,6 +60,8 @@ pub enum ExecuteMsg {
     ClaimTimeout { game_id: u64 },
     // Permissionless cleanup of settled games past timeout
     SweepSettled { game_ids: Vec<u64> },
+    // Withdraw dealer bankroll balance
+    WithdrawBankroll { amount: Option<Uint128> },
 }
 
 #[cw_serde]
@@ -71,6 +73,8 @@ pub enum QueryMsg {
     GetGame { game_id: u64 },
     #[returns(Vec<GameListItem>)]
     ListGames { status_filter: Option<String> },
+    #[returns(DealerBalanceResponse)]
+    GetDealerBalance { address: String },
 }
 
 #[cw_serde]
@@ -100,6 +104,11 @@ pub struct HandResponse {
     pub cards: Vec<u8>,
     pub bet: Uint128,
     pub status: String,
+}
+
+#[cw_serde]
+pub struct DealerBalanceResponse {
+    pub balance: Uint128,
 }
 
 #[cw_serde]

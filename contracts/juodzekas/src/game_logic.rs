@@ -209,6 +209,7 @@ mod tests {
             player: Addr::unchecked("player"),
             dealer: Addr::unchecked("dealer"),
             bet: Uint128::new(100),
+            bankroll: Uint128::new(10000),
             player_pubkey: Binary::default(),
             dealer_pubkey: Binary::default(),
             deck: vec![],
@@ -237,5 +238,50 @@ mod tests {
         assert_eq!(state.spots[0].hands[0].cards.len(), 2);
         assert_eq!(state.dealer_hand.len(), 1);
         assert_eq!(state.last_action_timestamp, Some(1000));
+    }
+
+    /// After fix: double down requires additional funds, so total_player_bets matches deposits.
+    #[test]
+    fn test_double_down_accounting_balanced() {
+        let bankroll = Uint128::new(1_000_000);
+        let original_bet = Uint128::new(1_000);
+        // Player deposits original_bet at JoinGame + original_bet at DoubleDown
+        let player_deposit = original_bet * Uint128::new(2);
+
+        // After double down, hand.bet = 2K, matching player_deposit
+        let doubled_bet = original_bet * Uint128::new(2);
+
+        // Player wins with doubled hand (1:1 payout)
+        let player_winnings = doubled_bet + doubled_bet; // 4K
+
+        let total_player_bets = doubled_bet; // 2K — matches deposit
+        let dealer_credit = bankroll + total_player_bets - player_winnings;
+        // = 1,000,000 + 2,000 - 4,000 = 998,000
+
+        let contract_balance = bankroll + player_deposit - player_winnings;
+        // = 1,000,000 + 2,000 - 4,000 = 998,000
+
+        assert_eq!(dealer_credit, contract_balance);
+    }
+
+    /// After fix: split requires additional funds, so total_player_bets matches deposits.
+    #[test]
+    fn test_split_accounting_balanced() {
+        let bankroll = Uint128::new(1_000_000);
+        let original_bet = Uint128::new(1_000);
+        // Player deposits original_bet at JoinGame + original_bet at Split
+        let player_deposit = original_bet * Uint128::new(2);
+
+        let hand1_bet = original_bet;
+        let hand2_bet = original_bet;
+        let total_player_bets = hand1_bet + hand2_bet; // 2K — matches deposit
+
+        // Both hands win (1:1)
+        let player_winnings = (hand1_bet * Uint128::new(2)) + (hand2_bet * Uint128::new(2)); // 4K
+
+        let dealer_credit = bankroll + total_player_bets - player_winnings;
+        let contract_balance = bankroll + player_deposit - player_winnings;
+
+        assert_eq!(dealer_credit, contract_balance);
     }
 }

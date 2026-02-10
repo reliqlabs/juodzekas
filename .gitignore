@@ -27,6 +27,7 @@ packages/zk-shuffle/tests/cache/*.vk
 # Debug/output files
 .output.txt
 *.log
+data/
 
 # developer configuration
 .env

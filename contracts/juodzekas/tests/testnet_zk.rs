@@ -1,5 +1,5 @@
 use cosmwasm_std::{Binary, Uint128};
-use juodzekas::msg::{ExecuteMsg, QueryMsg, GameResponse};
+use juodzekas::msg::{DealerBalanceResponse, ExecuteMsg, QueryMsg, GameResponse};
 use mob::{ChainConfig, Client, RustSigner};
 use std::sync::Arc;
 use std::env;
@@ -37,15 +37,13 @@ fn deserialize_ciphertext(b: &Binary) -> Ciphertext {
     Ciphertext { c0, c1 }
 }
 
-// Environment variables will be loaded from .env file or system environment
 fn get_env(key: &str) -> String {
     env::var(key).unwrap_or_else(|_| panic!("{key} must be set"))
 }
 
 fn query_contract<T: serde::de::DeserializeOwned>(client: &Client, address: &str, msg: &QueryMsg) -> anyhow::Result<T> {
     let query_bytes = serde_json_wasm::to_vec(msg)?;
-    
-    // Manual ABCI query since query_smart_contract was removed from Client
+
     let path = "/cosmwasm.wasm.v1.Query/SmartContractState";
     let data = {
         use prost::Message;
@@ -77,242 +75,451 @@ fn query_contract<T: serde::de::DeserializeOwned>(client: &Client, address: &str
     Ok(res)
 }
 
-#[test]
-fn test_testnet_zk_game_flow() -> anyhow::Result<()> {
+/// Poll until TX is confirmed on-chain. Fails if TX executes with non-zero code.
+fn confirm_tx(client: &Client, txhash: &str) -> anyhow::Result<()> {
+    for attempt in 0..15 {
+        match client.get_tx(txhash.to_string()) {
+            Ok(tx_resp) => {
+                if tx_resp.code != 0 {
+                    return Err(anyhow::anyhow!(
+                        "TX failed: code={}, log={}", tx_resp.code, tx_resp.raw_log
+                    ));
+                }
+                return Ok(());
+            }
+            Err(_) => {
+                if attempt < 14 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+            }
+        }
+    }
+    Err(anyhow::anyhow!("TX not confirmed after 30s: {txhash}"))
+}
+
+/// Extract card indices from debug-formatted WaitingForReveal status string.
+fn parse_reveal_requests(status: &str) -> Vec<u32> {
+    if let Some(start) = status.find("reveal_requests: [") {
+        let after = &status[start + "reveal_requests: [".len()..];
+        if let Some(end) = after.find(']') {
+            return after[..end]
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+        }
+    }
+    vec![]
+}
+
+/// Submit reveal for a single card from both dealer and player, confirming each TX.
+fn reveal_card_on_chain(
+    dealer_client: &Client,
+    player_client: &Client,
+    contract_addr: &str,
+    game_id: u64,
+    card_idx: u32,
+    dealer_keys: &KeyPair,
+    player_keys: &KeyPair,
+    deck: &[Binary],
+) -> anyhow::Result<()> {
+    let ciphertext = deserialize_ciphertext(&deck[card_idx as usize]);
+
+    // Dealer reveal
+    let d_reveal = reveal_card(&dealer_keys.sk, &ciphertext, &dealer_keys.pk);
+    let d_proof = tokio::runtime::Builder::new_current_thread()
+        .enable_all().build()?
+        .block_on(async {
+            generate_reveal_proof_rapidsnark(&d_reveal.public_inputs, d_reveal.sk_p)
+        }).map_err(|e| anyhow::anyhow!("Dealer reveal proof: {e}"))?;
+
+    let tx = dealer_client.execute_contract(
+        contract_addr.to_string(),
+        serde_json_wasm::to_vec(&ExecuteMsg::SubmitReveal {
+            game_id,
+            card_index: card_idx,
+            partial_decryption: serialize_ark(&d_reveal.partial_decryption),
+            proof: Binary::new(serde_json::to_vec(&d_proof)?),
+            public_inputs: d_reveal.public_inputs.to_ark_public_inputs()
+                .iter().map(|f| f.into_bigint().to_string()).collect(),
+        })?,
+        vec![], None, None,
+    ).map_err(|e| anyhow::anyhow!("Dealer reveal TX: {e}"))?;
+    confirm_tx(dealer_client, &tx.txhash)?;
+
+    // Player reveal
+    let p_reveal = reveal_card(&player_keys.sk, &ciphertext, &player_keys.pk);
+    let p_proof = tokio::runtime::Builder::new_current_thread()
+        .enable_all().build()?
+        .block_on(async {
+            generate_reveal_proof_rapidsnark(&p_reveal.public_inputs, p_reveal.sk_p)
+        }).map_err(|e| anyhow::anyhow!("Player reveal proof: {e}"))?;
+
+    let tx = player_client.execute_contract(
+        contract_addr.to_string(),
+        serde_json_wasm::to_vec(&ExecuteMsg::SubmitReveal {
+            game_id,
+            card_index: card_idx,
+            partial_decryption: serialize_ark(&p_reveal.partial_decryption),
+            proof: Binary::new(serde_json::to_vec(&p_proof)?),
+            public_inputs: p_reveal.public_inputs.to_ark_public_inputs()
+                .iter().map(|f| f.into_bigint().to_string()).collect(),
+        })?,
+        vec![], None, None,
+    ).map_err(|e| anyhow::anyhow!("Player reveal TX: {e}"))?;
+    confirm_tx(player_client, &tx.txhash)?;
+
+    Ok(())
+}
+
+/// Card value (0-51) to blackjack score for display purposes.
+fn card_score(val: u8) -> u8 {
+    let rank = (val % 13) + 1;
+    if rank == 1 { 11 } else if rank > 10 { 10 } else { rank }
+}
+
+fn hand_score(cards: &[u8]) -> u8 {
+    let mut score: u8 = 0;
+    let mut aces: u8 = 0;
+    for &c in cards {
+        let s = card_score(c);
+        if s == 11 { aces += 1; }
+        score = score.saturating_add(s);
+    }
+    while score > 21 && aces > 0 {
+        score -= 10;
+        aces -= 1;
+    }
+    score
+}
+
+/// Run a full game on testnet with the given seed. Player always stands immediately.
+fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
     dotenv().ok();
     env_logger::try_init().ok();
 
     let rpc_url = get_env("RPC_URL");
-    let _chain_id = get_env("CHAIN_ID");
     let contract_addr = get_env("CONTRACT_ADDR");
     let dealer_mnemonic = get_env("DEALER_MNEMONIC");
     let player_mnemonic = get_env("PLAYER_MNEMONIC");
 
-    let mut rng = ChaCha8Rng::seed_from_u64(42);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    // 1. Setup Wallets
+    // 1. Setup wallets
+    println!("=== Seed {seed} ===");
     println!("Setting up wallets...");
     let dealer_signer = Arc::new(RustSigner::from_mnemonic(dealer_mnemonic, "xion".to_string(), None)?);
     let player_signer = Arc::new(RustSigner::from_mnemonic(player_mnemonic, "xion".to_string(), None)?);
-
     let config = ChainConfig::new("xion-testnet-2".to_string(), rpc_url, "xion".to_string());
-
     let dealer_client = Client::new_with_signer(config.clone(), dealer_signer.clone())?;
     let player_client = Client::new_with_signer(config, player_signer.clone())?;
-
     println!("Dealer: {}", dealer_signer.address());
     println!("Player: {}", player_signer.address());
 
-    // 2. Generate ZK Keys and Initial Deck
+    // 2. Generate keys (deterministic from seed)
     let dealer_keys = KeyPair::generate(&mut rng);
     let player_keys = KeyPair::generate(&mut rng);
     let aggregated_pk = (dealer_keys.pk.into_group() + player_keys.pk.into_group()).into_affine();
 
+    // Initial plaintext deck
     let g = Point::generator();
-    let mut cards = Vec::new();
-    for i in 0..52 {
-        let card_point = (g * Fr::from(i as u64)).into_affine();
-        cards.push(card_point);
-    }
-
+    let cards: Vec<_> = (0..52).map(|i| (g * Fr::from(i as u64)).into_affine()).collect();
     let initial_deck: Vec<Ciphertext> = cards.iter().map(|m| {
         let r = Fr::rand(&mut rng);
         encrypt(&aggregated_pk, m, &r)
     }).collect();
 
-    // 3. Dealer: Create Game
-    println!("Dealer: Shuffling and generating proof...");
-    let dealer_shuffle_result = shuffle(&mut rng, &initial_deck, &aggregated_pk);
-    
-    // Wrapped in a spawn_blocking or similar if necessary, but rapidsnark is synchronous.
-    // However, it might be calling something that expects a runtime.
+    // 3. Dealer shuffle + proof
+    println!("Dealer: Shuffling...");
+    let dealer_shuffle = shuffle(&mut rng, &initial_deck, &aggregated_pk);
     let dealer_proof = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
+        .enable_all().build()?
         .block_on(async {
             generate_shuffle_proof_rapidsnark(
-                &dealer_shuffle_result.public_inputs,
-                dealer_shuffle_result.private_inputs.clone(),
+                &dealer_shuffle.public_inputs,
+                dealer_shuffle.private_inputs.clone(),
             )
-        })
-        .map_err(|e| anyhow::anyhow!("Dealer proof error: {e}"))?;
+        }).map_err(|e| anyhow::anyhow!("Dealer shuffle proof: {e}"))?;
 
-    let create_msg = ExecuteMsg::CreateGame {
-        public_key: serialize_ark(&dealer_keys.pk),
-        shuffled_deck: dealer_shuffle_result.deck.iter()
-            .map(serialize_ciphertext)
-            .collect(),
-        proof: Binary::new(serde_json::to_vec(&dealer_proof)?),
-        public_inputs: dealer_shuffle_result.public_inputs.to_ark_public_inputs()
-            .iter().map(|f| f.into_bigint().to_string()).collect(),
-    };
+    // 4. CreateGame
+    println!("Dealer: CreateGame...");
+    let contract_config: juodzekas::state::Config =
+        query_contract(&dealer_client, &contract_addr, &QueryMsg::GetConfig {})?;
+    let bankroll = contract_config.max_bet.u128() * 10;
 
-    println!("Dealer: Sending CreateGame...");
-    let create_msg_bytes = serde_json_wasm::to_vec(&create_msg)?;
-    
-    let config: juodzekas::state::Config = query_contract(&dealer_client, &contract_addr, &QueryMsg::GetConfig {})?;
-    let required_bankroll = config.max_bet.u128() * 10;
-    
-    let create_tx = dealer_client.execute_contract(
+    let tx = dealer_client.execute_contract(
         contract_addr.clone(),
-        create_msg_bytes,
-        vec![mob::Coin::new(config.denom.clone(), required_bankroll.to_string())],
+        serde_json_wasm::to_vec(&ExecuteMsg::CreateGame {
+            public_key: serialize_ark(&dealer_keys.pk),
+            shuffled_deck: dealer_shuffle.deck.iter().map(serialize_ciphertext).collect(),
+            proof: Binary::new(serde_json::to_vec(&dealer_proof)?),
+            public_inputs: dealer_shuffle.public_inputs.to_ark_public_inputs()
+                .iter().map(|f| f.into_bigint().to_string()).collect(),
+        })?,
+        vec![mob::Coin::new(contract_config.denom.clone(), bankroll.to_string())],
         None,
         Some(800_000),
-    ).map_err(|e| anyhow::anyhow!("CreateGame TX error: {e}"))?;
-    println!("CreateGame TX: {}", create_tx.txhash);
+    ).map_err(|e| anyhow::anyhow!("CreateGame TX: {e}"))?;
+    println!("CreateGame TX: {}", tx.txhash);
+    confirm_tx(&dealer_client, &tx.txhash)?;
+    println!("CreateGame confirmed");
 
-    // Get TX details to see if it failed on-chain
-    println!("Checking TX status...");
-    for _ in 0..10 {
-        match dealer_client.get_tx(create_tx.txhash.clone()) {
-            Ok(tx_resp) => {
-                println!("TX status found: code={}", tx_resp.code);
-                if tx_resp.code != 0 {
-                    println!("TX failed: {}", tx_resp.raw_log);
-                }
-                break;
-            }
-            Err(_) => {
-                println!("TX not found yet...");
-                std::thread::sleep(std::time::Duration::from_secs(2));
-            }
-        }
-    }
-
-    // Wait for the block to be committed
-    println!("Waiting for game to be indexed...");
-    std::thread::sleep(std::time::Duration::from_secs(6));
-
-    let games: Vec<juodzekas::msg::GameListItem> = query_contract(&dealer_client, &contract_addr, &QueryMsg::ListGames { status_filter: None })?;
-    println!("Games found total: {}", games.len());
-    for g in &games {
-        println!("  Game ID: {}, Dealer: {}, Status: {}", g.game_id, g.dealer, g.status);
-    }
-    
-    // Extract game_id from events (simplified for this test)
-    let mut game_id = None;
-    for i in 0..15 {
-        let games: Vec<juodzekas::msg::GameListItem> = query_contract(&dealer_client, &contract_addr, &QueryMsg::ListGames { status_filter: None })?;
-        if let Some(g) = games.iter().find(|g| g.dealer == dealer_signer.address()) {
-            game_id = Some(g.game_id);
-            break;
-        }
-        println!("Game not found yet (attempt {}), retrying...", i + 1);
-        std::thread::sleep(std::time::Duration::from_secs(4));
-    }
-
-    let game_id = game_id.ok_or_else(|| anyhow::anyhow!("Game not found after retries"))?;
+    // Find game ID
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    let games: Vec<juodzekas::msg::GameListItem> = query_contract(
+        &dealer_client, &contract_addr,
+        &QueryMsg::ListGames { status_filter: Some("WaitingForPlayerJoin".to_string()) },
+    )?;
+    let game_id = games.iter()
+        .filter(|g| g.dealer == dealer_signer.address())
+        .map(|g| g.game_id)
+        .max()
+        .ok_or_else(|| anyhow::anyhow!("No WaitingForPlayerJoin game found for dealer"))?;
     println!("Game ID: {game_id}");
 
-    // 4. Player: Join Game
-    println!("Player: Shuffling and generating proof...");
-    let player_shuffle_result = shuffle(&mut rng, &dealer_shuffle_result.deck, &aggregated_pk);
-    
+    // 5. Player shuffle + proof
+    println!("Player: Shuffling...");
+    let player_shuffle = shuffle(&mut rng, &dealer_shuffle.deck, &aggregated_pk);
     let player_proof = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
+        .enable_all().build()?
         .block_on(async {
             generate_shuffle_proof_rapidsnark(
-                &player_shuffle_result.public_inputs,
-                player_shuffle_result.private_inputs.clone(),
+                &player_shuffle.public_inputs,
+                player_shuffle.private_inputs.clone(),
             )
-        })
-        .map_err(|e| anyhow::anyhow!("Player proof error: {e}"))?;
+        }).map_err(|e| anyhow::anyhow!("Player shuffle proof: {e}"))?;
 
-    let join_msg = ExecuteMsg::JoinGame {
-        game_id,
-        bet: Uint128::new(1000),
-        public_key: serialize_ark(&player_keys.pk),
-        shuffled_deck: player_shuffle_result.deck.iter()
-            .map(serialize_ciphertext)
-            .collect(),
-        proof: Binary::new(serde_json::to_vec(&player_proof)?),
-        public_inputs: player_shuffle_result.public_inputs.to_ark_public_inputs()
-            .iter().map(|f| f.into_bigint().to_string()).collect(),
-    };
-
-    println!("Player: Sending JoinGame...");
-    let join_msg_bytes = serde_json_wasm::to_vec(&join_msg)?;
-    let join_tx = player_client.execute_contract(
+    // 6. JoinGame
+    println!("Player: JoinGame...");
+    let tx = player_client.execute_contract(
         contract_addr.clone(),
-        join_msg_bytes,
-        vec![mob::Coin::new("uxion".to_string(), 1000u128.to_string())],
+        serde_json_wasm::to_vec(&ExecuteMsg::JoinGame {
+            game_id,
+            bet: Uint128::new(1000),
+            public_key: serialize_ark(&player_keys.pk),
+            shuffled_deck: player_shuffle.deck.iter().map(serialize_ciphertext).collect(),
+            proof: Binary::new(serde_json::to_vec(&player_proof)?),
+            public_inputs: player_shuffle.public_inputs.to_ark_public_inputs()
+                .iter().map(|f| f.into_bigint().to_string()).collect(),
+        })?,
+        vec![mob::Coin::new("uxion".to_string(), "1000".to_string())],
         None,
-        Some(800_000),
-    ).map_err(|e| anyhow::anyhow!("JoinGame TX error: {e}"))?;
-    println!("JoinGame TX: {}", join_tx.txhash);
+        Some(1_000_000),
+    ).map_err(|e| anyhow::anyhow!("JoinGame TX: {e}"))?;
+    println!("JoinGame TX: {}", tx.txhash);
+    confirm_tx(&player_client, &tx.txhash)?;
+    println!("JoinGame confirmed");
 
-    // 5. Query Game State
-    println!("Waiting for join to be processed...");
-    std::thread::sleep(std::time::Duration::from_secs(6));
+    // 7. Game loop: reveal cards, take actions, until settled
+    let mut dealer_hit_count = 0u32;
+    let max_rounds = 20;
+    for round in 0..max_rounds {
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let game: GameResponse = query_contract(
+            &player_client, &contract_addr,
+            &QueryMsg::GetGame { game_id },
+        )?;
+        println!("\n--- Round {round} ---");
+        println!("Status: {}", game.status);
+        println!("Player hands: {:?}", game.hands);
+        println!("Dealer hand: {:?} (score: {})", game.dealer_hand, hand_score(&game.dealer_hand));
 
-    let mut game: GameResponse = query_contract(&player_client, &contract_addr, &QueryMsg::GetGame { game_id })?;
-    println!("Game Status: {}", game.status);
+        if game.status.contains("Settled") {
+            println!("\n=== GAME SETTLED (seed {seed}) ===");
+            println!("Result: {}", game.status);
+            for (i, hand) in game.hands.iter().enumerate() {
+                println!("  Hand {i}: cards={:?} score={} status={}", hand.cards, hand_score(&hand.cards.iter().map(|c| *c as u8).collect::<Vec<_>>()), hand.status);
+            }
+            println!("  Dealer: {:?} score={}", game.dealer_hand, hand_score(&game.dealer_hand));
+            println!("  Dealer hit {dealer_hit_count} time(s) after hole card");
 
-    // 6. Reveal Cards (Player & Dealer)
-    // The contract expects reveals for card 0, 1 (player) and 2 (dealer upcard)
-    // Initially card 3 (dealer hole card) is NOT requested until dealer turn.
+            // Assertions
+            assert!(!game.hands.is_empty(), "Player should have at least one hand");
+            assert!(game.hands[0].cards.len() >= 2, "Player hand needs >= 2 cards");
+            assert!(game.dealer_hand.len() >= 2, "Dealer hand needs >= 2 cards");
 
-    if game.status.contains("WaitingForReveal") {
-        // Parse requested cards from game.status if we had a better parser, 
-        // but we know it's [0, 1, 2] from JoinGame implementation
-        let card_indices = vec![0u32, 1u32, 2u32];
-
-        for card_idx in card_indices {
-            println!("Revealing card {card_idx}...");
-            let ciphertext = deserialize_ciphertext(&game.deck[card_idx as usize]);
-
-            // Both must reveal
-            // Dealer reveals
-            let dealer_reveal = reveal_card(&dealer_keys.sk, &ciphertext, &dealer_keys.pk);
-            let dealer_reveal_proof = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().unwrap()
-                .block_on(async {
-                    generate_reveal_proof_rapidsnark(&dealer_reveal.public_inputs, dealer_reveal.sk_p)
-                }).map_err(|e| anyhow::anyhow!("Dealer reveal proof error: {e}"))?;
-
-            let reveal_msg_dealer = ExecuteMsg::SubmitReveal {
-                game_id,
-                card_index: card_idx,
-                partial_decryption: serialize_ark(&dealer_reveal.partial_decryption),
-                proof: Binary::new(serde_json::to_vec(&dealer_reveal_proof)?),
-                public_inputs: dealer_reveal.public_inputs.to_ark_public_inputs()
-                    .iter().map(|f| f.into_bigint().to_string()).collect(),
-            };
-            dealer_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_dealer)?, vec![], None, None)?;
-
-            // Player reveals
-            let player_reveal = reveal_card(&player_keys.sk, &ciphertext, &player_keys.pk);
-            let player_reveal_proof = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().unwrap()
-                .block_on(async {
-                    generate_reveal_proof_rapidsnark(&player_reveal.public_inputs, player_reveal.sk_p)
-                }).map_err(|e| anyhow::anyhow!("Player reveal proof error: {e}"))?;
-
-            let reveal_msg_player = ExecuteMsg::SubmitReveal {
-                game_id,
-                card_index: card_idx,
-                partial_decryption: serialize_ark(&player_reveal.partial_decryption),
-                proof: Binary::new(serde_json::to_vec(&player_reveal_proof)?),
-                public_inputs: player_reveal.public_inputs.to_ark_public_inputs()
-                    .iter().map(|f| f.into_bigint().to_string()).collect(),
-            };
-            player_client.execute_contract(contract_addr.clone(), serde_json_wasm::to_vec(&reveal_msg_player)?, vec![], None, None)?;
-
-            println!("Card {card_idx} revealed");
+            // Verify dealer balance was credited
             std::thread::sleep(std::time::Duration::from_secs(4));
+            let dealer_bal: DealerBalanceResponse = query_contract(
+                &dealer_client, &contract_addr,
+                &QueryMsg::GetDealerBalance { address: dealer_signer.address() },
+            )?;
+            println!("Dealer balance after settlement: {}", dealer_bal.balance);
+            assert!(!dealer_bal.balance.is_zero(), "Dealer should have balance after settlement");
+
+            // Withdraw dealer balance
+            let tx = dealer_client.execute_contract(
+                contract_addr.clone(),
+                serde_json_wasm::to_vec(&ExecuteMsg::WithdrawBankroll { amount: None })?,
+                vec![], None, None,
+            ).map_err(|e| anyhow::anyhow!("WithdrawBankroll TX: {e}"))?;
+            println!("WithdrawBankroll TX: {}", tx.txhash);
+            confirm_tx(&dealer_client, &tx.txhash)?;
+            println!("WithdrawBankroll confirmed");
+
+            // Verify balance is now zero
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            let dealer_bal: DealerBalanceResponse = query_contract(
+                &dealer_client, &contract_addr,
+                &QueryMsg::GetDealerBalance { address: dealer_signer.address() },
+            )?;
+            assert!(dealer_bal.balance.is_zero(), "Dealer balance should be zero after withdrawal");
+
+            return Ok(());
+        } else if game.status.contains("WaitingForReveal") {
+            let card_indices = parse_reveal_requests(&game.status);
+            assert!(!card_indices.is_empty(), "WaitingForReveal with no cards?");
+
+            // Track dealer hits (cards beyond index 3 when next_status is DealerTurn)
+            if game.status.contains("DealerTurn") {
+                for &idx in &card_indices {
+                    if idx > 3 {
+                        dealer_hit_count += 1;
+                    }
+                }
+            }
+
+            for &card_idx in &card_indices {
+                println!("Revealing card {card_idx}...");
+                reveal_card_on_chain(
+                    &dealer_client, &player_client,
+                    &contract_addr, game_id, card_idx,
+                    &dealer_keys, &player_keys,
+                    &game.deck,
+                )?;
+                println!("Card {card_idx} revealed");
+            }
+        } else if game.status.contains("PlayerTurn") {
+            println!("Player: Stand");
+            let tx = player_client.execute_contract(
+                contract_addr.clone(),
+                serde_json_wasm::to_vec(&ExecuteMsg::Stand { game_id })?,
+                vec![], None, None,
+            ).map_err(|e| anyhow::anyhow!("Stand TX: {e}"))?;
+            confirm_tx(&player_client, &tx.txhash)?;
+            println!("Stand confirmed");
+        } else {
+            panic!("Unexpected game status: {}", game.status);
         }
     }
 
-    // Final state
-    std::thread::sleep(std::time::Duration::from_secs(6));
-    game = query_contract(&player_client, &contract_addr, &QueryMsg::GetGame { game_id })?;
-    println!("Final Game Status: {}", game.status);
-    println!("Player Hands: {:?}", game.hands);
-    println!("Dealer Hand: {:?}", game.dealer_hand);
+    panic!("Game did not settle within {max_rounds} rounds");
+}
 
-    Ok(())
+/// Simulate card values locally for a given seed without touching testnet.
+/// Returns (player_cards, dealer_cards) as vectors of card_value (0-51).
+fn simulate_initial_deal(seed: u64) -> (Vec<u8>, Vec<u8>) {
+    use ark_ff::UniformRand;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let dealer_keys = KeyPair::generate(&mut rng);
+    let player_keys = KeyPair::generate(&mut rng);
+    let aggregated_pk = (dealer_keys.pk.into_group() + player_keys.pk.into_group()).into_affine();
+
+    let g = Point::generator();
+    let cards: Vec<_> = (0..52).map(|i| (g * Fr::from(i as u64)).into_affine()).collect();
+    let initial_deck: Vec<Ciphertext> = cards.iter().map(|m| {
+        let r = Fr::rand(&mut rng);
+        encrypt(&aggregated_pk, m, &r)
+    }).collect();
+
+    let dealer_shuffle = shuffle(&mut rng, &initial_deck, &aggregated_pk);
+    let player_shuffle = shuffle(&mut rng, &dealer_shuffle.deck, &aggregated_pk);
+
+    let mut player_cards = vec![];
+    let mut dealer_cards = vec![];
+
+    // Cards 0,1 → player; cards 2,3 → dealer
+    for card_idx in 0..4u32 {
+        let ct = &player_shuffle.deck[card_idx as usize];
+        let d_reveal = reveal_card(&dealer_keys.sk, ct, &dealer_keys.pk);
+        let p_reveal = reveal_card(&player_keys.sk, ct, &player_keys.pk);
+
+        let mut d_bytes = Vec::new();
+        d_reveal.partial_decryption.serialize_compressed(&mut d_bytes).unwrap();
+        let mut p_bytes = Vec::new();
+        p_reveal.partial_decryption.serialize_compressed(&mut p_bytes).unwrap();
+
+        let card_value = (p_bytes[0] ^ d_bytes[0]) % 52;
+        if card_idx < 2 {
+            player_cards.push(card_value);
+        } else {
+            dealer_cards.push(card_value);
+        }
+    }
+
+    (player_cards, dealer_cards)
+}
+
+/// Contract's scoring logic, duplicated for local use.
+fn contract_score(hand: &[u8]) -> u8 {
+    let mut score: u8 = 0;
+    let mut aces: u8 = 0;
+    for &card in hand {
+        let val = (card % 13) + 1;
+        if val == 1 { aces += 1; score += 11; }
+        else if val > 10 { score += 10; }
+        else { score += val; }
+    }
+    while score > 21 && aces > 0 { score -= 10; aces -= 1; }
+    score
+}
+
+fn is_blackjack(hand: &[u8]) -> bool {
+    hand.len() == 2 && contract_score(hand) == 21
+}
+
+/// Find seeds that produce specific dealer scenarios. Run with:
+///   cargo test -p juodzekas --test testnet_zk find_seeds -- --nocapture --ignored
+#[test]
+#[ignore]
+fn find_seeds() {
+    let mut dealer_hit_seed = None;
+    let mut dealer_bj_seed = None;
+
+    for seed in 0..10_000u64 {
+        let (_, dealer) = simulate_initial_deal(seed);
+        let d_score = contract_score(&dealer);
+
+        if dealer_hit_seed.is_none() && d_score < 17 {
+            println!("Seed {seed}: dealer={dealer:?} score={d_score} → DEALER MUST HIT");
+            dealer_hit_seed = Some(seed);
+        }
+        if dealer_bj_seed.is_none() && is_blackjack(&dealer) {
+            println!("Seed {seed}: dealer={dealer:?} score={d_score} → DEALER BLACKJACK");
+            dealer_bj_seed = Some(seed);
+        }
+        if dealer_hit_seed.is_some() && dealer_bj_seed.is_some() {
+            break;
+        }
+    }
+
+    println!("\n=== Results ===");
+    println!("Dealer must hit seed: {:?}", dealer_hit_seed);
+    println!("Dealer blackjack seed: {:?}", dealer_bj_seed);
+    assert!(dealer_hit_seed.is_some(), "No dealer-hit seed found in 0..10000");
+    assert!(dealer_bj_seed.is_some(), "No dealer-blackjack seed found in 0..10000");
+}
+
+/// Seed 42: dealer score >= 17 immediately, no dealer hits. Basic flow test.
+#[test]
+fn test_testnet_zk_seed_42() -> anyhow::Result<()> {
+    run_testnet_game(42)
+}
+
+/// Seed 7: dealer score >= 17 immediately. Different card distribution.
+#[test]
+fn test_testnet_zk_seed_7() -> anyhow::Result<()> {
+    run_testnet_game(7)
+}
+
+/// Seed 0: dealer gets score 14 → must hit. Exercises dealer-hit code path.
+#[test]
+fn test_testnet_zk_dealer_hit() -> anyhow::Result<()> {
+    run_testnet_game(0)
+}
+
+/// Seed 77: dealer gets blackjack (Queen + Ace = 21). Tests immediate settlement.
+#[test]
+fn test_testnet_zk_dealer_blackjack() -> anyhow::Result<()> {
+    run_testnet_game(77)
 }

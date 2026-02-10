@@ -1,12 +1,13 @@
-use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdResult};
-use crate::msg::{GameListItem, GameResponse, PendingRevealResponse, QueryMsg};
-use crate::state::{Config, CONFIG, GAMES};
+use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdResult, Uint128};
+use crate::msg::{DealerBalanceResponse, GameListItem, GameResponse, PendingRevealResponse, QueryMsg};
+use crate::state::{Config, CONFIG, DEALER_BALANCES, GAMES};
 
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_json_binary(&query_config(deps)?),
         QueryMsg::GetGame { game_id } => to_json_binary(&query_game(deps, game_id)?),
         QueryMsg::ListGames { status_filter } => to_json_binary(&query_list_games(deps, status_filter)?),
+        QueryMsg::GetDealerBalance { address } => to_json_binary(&query_dealer_balance(deps, address)?),
     }
 }
 
@@ -79,4 +80,12 @@ fn query_list_games(deps: Deps, status_filter: Option<String>) -> StdResult<Vec<
         .collect();
 
     games
+}
+
+fn query_dealer_balance(deps: Deps, address: String) -> StdResult<DealerBalanceResponse> {
+    let addr = deps.api.addr_validate(&address)?;
+    let balance = DEALER_BALANCES
+        .may_load(deps.storage, &addr)?
+        .unwrap_or(Uint128::zero());
+    Ok(DealerBalanceResponse { balance })
 }
