@@ -36,11 +36,7 @@ impl Wallet {
     /// Create a new wallet from a mnemonic phrase
     pub fn from_mnemonic(mnemonic: &str, prefix: &str) -> Result<Self, WalletError> {
         // RustSigner::from_mnemonic takes String arguments
-        let signer = RustSigner::from_mnemonic(
-            mnemonic.to_string(),
-            prefix.to_string(),
-            None,
-        )?;
+        let signer = RustSigner::from_mnemonic(mnemonic.to_string(), prefix.to_string(), None)?;
 
         // address() returns String, not Result
         let address = signer.address();
@@ -67,7 +63,6 @@ impl Wallet {
         Ok((wallet, mnemonic_phrase))
     }
 
-
     /// Connect wallet to blockchain RPC
     pub fn connect(
         &mut self,
@@ -75,7 +70,11 @@ impl Wallet {
         rpc_url: &str,
         prefix: &str,
     ) -> Result<(), WalletError> {
-        let config = ChainConfig::new(chain_id.to_string(), rpc_url.to_string(), prefix.to_string());
+        let config = ChainConfig::new(
+            chain_id.to_string(),
+            rpc_url.to_string(),
+            prefix.to_string(),
+        );
 
         // Client::new is synchronous in mob (it creates its own runtime)
         let client = Client::new_with_signer(config, Arc::clone(&self.signer))?;

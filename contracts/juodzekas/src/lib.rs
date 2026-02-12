@@ -6,11 +6,11 @@ pub mod state;
 pub mod zk;
 
 #[cfg(not(feature = "library"))]
-use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use crate::error::ContractError;
 #[cfg(not(feature = "library"))]
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 #[cfg(not(feature = "library"))]
-use crate::error::ContractError;
+use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 
 #[cfg(not(feature = "library"))]
 #[entry_point]

@@ -19,15 +19,27 @@ pub struct PayoutRatio {
 }
 
 impl PayoutRatio {
-    pub const THREE_TO_TWO: Self = Self { numerator: 3, denominator: 2 };
-    pub const SIX_TO_FIVE: Self = Self { numerator: 6, denominator: 5 };
-    pub const ONE_TO_ONE: Self = Self { numerator: 1, denominator: 1 };
+    pub const THREE_TO_TWO: Self = Self {
+        numerator: 3,
+        denominator: 2,
+    };
+    pub const SIX_TO_FIVE: Self = Self {
+        numerator: 6,
+        denominator: 5,
+    };
+    pub const ONE_TO_ONE: Self = Self {
+        numerator: 1,
+        denominator: 1,
+    };
 
     pub fn new(numerator: u16, denominator: u16) -> Result<Self, &'static str> {
         if denominator == 0 {
             return Err("Denominator cannot be zero");
         }
-        Ok(Self { numerator, denominator })
+        Ok(Self {
+            numerator,
+            denominator,
+        })
     }
 
     pub fn calculate_payout(&self, bet: u128) -> u128 {

@@ -43,13 +43,27 @@ pub enum ExecuteMsg {
         public_inputs: Vec<String>,
     },
     // Phase 3 & 4: Game actions
-    Hit { game_id: u64 },
-    Stand { game_id: u64 },
-    DoubleDown { game_id: u64 },
-    Split { game_id: u64 },
-    Surrender { game_id: u64 },
-    Insurance { game_id: u64 },
-    DeclineInsurance { game_id: u64 },
+    Hit {
+        game_id: u64,
+    },
+    Stand {
+        game_id: u64,
+    },
+    DoubleDown {
+        game_id: u64,
+    },
+    Split {
+        game_id: u64,
+    },
+    Surrender {
+        game_id: u64,
+    },
+    Insurance {
+        game_id: u64,
+    },
+    DeclineInsurance {
+        game_id: u64,
+    },
     // Phase 3, 4, 5: Submit reveal and proof for a card
     SubmitReveal {
         game_id: u64,
@@ -59,15 +73,23 @@ pub enum ExecuteMsg {
         public_inputs: Vec<String>,
     },
     // Timeout claim: if opponent doesn't act, claim funds
-    ClaimTimeout { game_id: u64 },
+    ClaimTimeout {
+        game_id: u64,
+    },
     // Cancel an unjoined game and return bankroll
-    CancelGame { game_id: u64 },
+    CancelGame {
+        game_id: u64,
+    },
     // Permissionless cleanup of settled games past timeout
-    SweepSettled { game_ids: Vec<u64> },
+    SweepSettled {
+        game_ids: Vec<u64>,
+    },
     // Deposit additional bankroll
     DepositBankroll {},
     // Withdraw dealer bankroll balance
-    WithdrawBankroll { amount: Option<Uint128> },
+    WithdrawBankroll {
+        amount: Option<Uint128>,
+    },
 }
 
 #[cw_serde]
@@ -78,7 +100,11 @@ pub enum QueryMsg {
     #[returns(GameResponse)]
     GetGame { game_id: u64 },
     #[returns(Vec<GameListItem>)]
-    ListGames { status_filter: Option<String>, limit: Option<u32>, start_after: Option<u64> },
+    ListGames {
+        status_filter: Option<String>,
+        limit: Option<u32>,
+        start_after: Option<u64>,
+    },
     #[returns(DealerBalanceResponse)]
     GetDealerBalance {},
     #[returns(DealerResponse)]

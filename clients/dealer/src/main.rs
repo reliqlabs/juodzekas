@@ -18,8 +18,8 @@ use zk_shuffle::shuffle::shuffle;
 
 // Re-export contract types
 use juodzekas::msg::{
-    Config as ContractConfig, DealerBalanceResponse, DoubleRestriction, GameListItem,
-    GameResponse, InstantiateMsg, PayoutRatio,
+    Config as ContractConfig, DealerBalanceResponse, DoubleRestriction, GameListItem, GameResponse,
+    InstantiateMsg, PayoutRatio,
 };
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
@@ -165,9 +165,8 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let signer =
-        RustSigner::from_mnemonic(cli.mnemonic.clone(), "xion".into(), None)
-            .expect("Invalid mnemonic");
+    let signer = RustSigner::from_mnemonic(cli.mnemonic.clone(), "xion".into(), None)
+        .expect("Invalid mnemonic");
     let address = signer.address();
     log::info!("Dealer address: {address}");
 
@@ -251,12 +250,17 @@ fn main() {
                 log::info!("Starting next game...");
             }
         }
-        Command::Deposit { contract_addr, amount, denom } => {
+        Command::Deposit {
+            contract_addr,
+            amount,
+            denom,
+        } => {
             log::info!("Depositing {amount} {denom} to contract {contract_addr}...");
             let msg_json = serde_json::json!({ "deposit_bankroll": {} });
             let msg_bytes = serde_json::to_vec(&msg_json).unwrap();
-            let funds = vec![mob::Coin::new(&denom, &amount.to_string())];
-            match execute_and_confirm(&client, contract_addr, msg_bytes, funds, "Deposit bankroll") {
+            let funds = vec![mob::Coin::new(&denom, amount.to_string())];
+            match execute_and_confirm(&client, contract_addr, msg_bytes, funds, "Deposit bankroll")
+            {
                 Ok(resp) => log::info!("Deposit confirmed! Hash: {}", resp.txhash),
                 Err(e) => {
                     log::error!("Deposit failed: {e}");
@@ -386,20 +390,14 @@ fn cmd_init(
 
     // 4. Instantiate with bankroll funds
     let funds = if bankroll > 0 {
-        vec![mob::Coin::new(denom, &bankroll.to_string())]
+        vec![mob::Coin::new(denom, bankroll.to_string())]
     } else {
         vec![]
     };
 
     log::info!("Instantiating contract (code_id={code_id}, bankroll={bankroll} {denom})...");
-    let inst_response = broadcast_and_confirm_instantiate(
-        client,
-        sender,
-        code_id,
-        label,
-        msg_bytes,
-        funds,
-    )?;
+    let inst_response =
+        broadcast_and_confirm_instantiate(client, sender, code_id, label, msg_bytes, funds)?;
     let contract_addr = extract_contract_address(&inst_response)?;
     log::info!("Contract instantiated: tx={}", inst_response.txhash);
 
@@ -465,10 +463,7 @@ fn extract_contract_address(tx: &mob::TxResponse) -> Result<String, BoxErr> {
                         for attr in attrs {
                             let key = attr.get("key").and_then(|k| k.as_str()).unwrap_or("");
                             if key == "_contract_address" {
-                                let val = attr
-                                    .get("value")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let val = attr.get("value").and_then(|v| v.as_str()).unwrap_or("");
                                 return Ok(val.to_string());
                             }
                         }
@@ -501,7 +496,10 @@ fn parse_double_restriction(s: &str) -> Result<DoubleRestriction, BoxErr> {
         "any" => Ok(DoubleRestriction::Any),
         "hard9_10_11" => Ok(DoubleRestriction::Hard9_10_11),
         "hard10_11" => Ok(DoubleRestriction::Hard10_11),
-        _ => Err(format!("Invalid double restriction '{s}', expected: any, hard9_10_11, hard10_11").into()),
+        _ => Err(format!(
+            "Invalid double restriction '{s}', expected: any, hard9_10_11, hard10_11"
+        )
+        .into()),
     }
 }
 
@@ -565,8 +563,10 @@ fn create_game(
         .to_ark_public_inputs()
         .iter()
         .map(|f| {
-            let bigint =
-                num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &f.into_bigint().to_bytes_le());
+            let bigint = num_bigint::BigInt::from_bytes_le(
+                num_bigint::Sign::Plus,
+                &f.into_bigint().to_bytes_le(),
+            );
             bigint.to_string()
         })
         .collect();
@@ -659,9 +659,7 @@ fn game_loop(
             }
             Err(e) => {
                 consecutive_query_failures += 1;
-                log::warn!(
-                    "Query failed ({consecutive_query_failures}x): {e}"
-                );
+                log::warn!("Query failed ({consecutive_query_failures}x): {e}");
                 if consecutive_query_failures >= 30 {
                     return Err(format!(
                         "Game {game_id}: giving up after {consecutive_query_failures} consecutive query failures"
@@ -676,7 +674,10 @@ fn game_loop(
         if status.contains("WaitingForPlayerJoin") {
             // Check if we've waited too long for a player
             if game_start.elapsed() > claim_after {
-                log::warn!("No player joined after {:?}, claiming timeout", game_start.elapsed());
+                log::warn!(
+                    "No player joined after {:?}, claiming timeout",
+                    game_start.elapsed()
+                );
                 match claim_timeout(client, config, game_id) {
                     Ok(_) => log::info!("Timeout claimed for game {game_id}"),
                     Err(e) => log::error!("Failed to claim timeout: {e}"),
@@ -708,7 +709,10 @@ fn game_loop(
 
         // For any non-settled, non-reveal status: check if player timed out
         if game_start.elapsed() > claim_after {
-            log::warn!("Game {game_id} stale ({:?} elapsed), attempting timeout claim", game_start.elapsed());
+            log::warn!(
+                "Game {game_id} stale ({:?} elapsed), attempting timeout claim",
+                game_start.elapsed()
+            );
             match claim_timeout(client, config, game_id) {
                 Ok(_) => {
                     log::info!("Timeout claimed for game {game_id}");
@@ -818,8 +822,10 @@ fn submit_reveal(
         .to_ark_public_inputs()
         .iter()
         .map(|f| {
-            let bigint =
-                num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &f.into_bigint().to_bytes_le());
+            let bigint = num_bigint::BigInt::from_bytes_le(
+                num_bigint::Sign::Plus,
+                &f.into_bigint().to_bytes_le(),
+            );
             bigint.to_string()
         })
         .collect();
@@ -900,7 +906,7 @@ fn parse_reveal_requests(status: &str) -> Vec<u32> {
         .split("reveal_requests:")
         .nth(1)
         .and_then(|s| s.split(']').next())
-        .map(|s| s.trim_start_matches(|c: char| c == ' ' || c == '['))
+        .map(|s| s.trim_start_matches([' ', '[']))
         .map(|s| {
             s.split(',')
                 .filter_map(|n| n.trim().parse::<u32>().ok())
@@ -941,9 +947,11 @@ fn serialize_point(p: &Point) -> Result<Vec<u8>, BoxErr> {
 
 fn serialize_ciphertext(ct: &Ciphertext) -> Result<Vec<u8>, BoxErr> {
     let mut buf = Vec::new();
-    ct.c0.serialize_compressed(&mut buf)
+    ct.c0
+        .serialize_compressed(&mut buf)
         .map_err(|e| format!("Failed to serialize ciphertext c0: {e}"))?;
-    ct.c1.serialize_compressed(&mut buf)
+    ct.c1
+        .serialize_compressed(&mut buf)
         .map_err(|e| format!("Failed to serialize ciphertext c1: {e}"))?;
     Ok(buf)
 }
@@ -985,10 +993,9 @@ async fn query_contract_raw(
         return Err(format!("ABCI query failed: {}", response.log).into());
     }
 
-    let res_wrapper =
-        xion_types::cosmwasm::wasm::v1::QuerySmartContractStateResponse::decode(
-            response.value.as_slice(),
-        )?;
+    let res_wrapper = xion_types::cosmwasm::wasm::v1::QuerySmartContractStateResponse::decode(
+        response.value.as_slice(),
+    )?;
     Ok(res_wrapper.data)
 }
 
@@ -1007,16 +1014,12 @@ async fn query_dealer_balance(
     rpc_url: &str,
     contract_addr: &str,
 ) -> Result<DealerBalanceResponse, BoxErr> {
-    let query_bytes =
-        serde_json::to_vec(&serde_json::json!({ "get_dealer_balance": {} }))?;
+    let query_bytes = serde_json::to_vec(&serde_json::json!({ "get_dealer_balance": {} }))?;
     let response_bytes = query_contract_raw(rpc_url, contract_addr, &query_bytes).await?;
     Ok(serde_json::from_slice(&response_bytes)?)
 }
 
-async fn query_config(
-    rpc_url: &str,
-    contract_addr: &str,
-) -> Result<ContractConfig, BoxErr> {
+async fn query_config(rpc_url: &str, contract_addr: &str) -> Result<ContractConfig, BoxErr> {
     let query_bytes = serde_json::to_vec(&serde_json::json!({ "get_config": {} }))?;
     let response_bytes = query_contract_raw(rpc_url, contract_addr, &query_bytes).await?;
     Ok(serde_json::from_slice(&response_bytes)?)
@@ -1043,8 +1046,13 @@ fn execute_and_confirm(
     funds: Vec<mob::Coin>,
     memo: &str,
 ) -> Result<mob::TxResponse, BoxErr> {
-    let broadcast =
-        client.execute_contract(contract_addr, msg_bytes, funds, Some(memo.to_string()), None)?;
+    let broadcast = client.execute_contract(
+        contract_addr,
+        msg_bytes,
+        funds,
+        Some(memo.to_string()),
+        None,
+    )?;
 
     if broadcast.code != 0 {
         return Err(format!("Broadcast rejected: {}", broadcast.raw_log).into());

@@ -36,8 +36,15 @@ pub fn calculate_hand_value(cards: &[Card]) -> u8 {
 pub fn is_soft_hand(cards: &[Card]) -> bool {
     let has_ace = cards.iter().any(|c| c.value() == 11);
     let value = calculate_hand_value(cards);
-    has_ace && value <= 21 && cards.iter().filter(|c| c.value() == 11).count() > 0
-        && cards.iter().map(|c| if c.value() == 11 { 1 } else { c.value() }).sum::<u8>() + 10 == value
+    has_ace
+        && value <= 21
+        && cards.iter().filter(|c| c.value() == 11).count() > 0
+        && cards
+            .iter()
+            .map(|c| if c.value() == 11 { 1 } else { c.value() })
+            .sum::<u8>()
+            + 10
+            == value
 }
 
 /// Check if a hand is busted

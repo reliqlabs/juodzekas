@@ -1,13 +1,13 @@
 use crate::babyjubjub::Fq;
 use ark_bn254::{Bn254, Fr as Bn254Fr};
-use ark_groth16::{Groth16, Proof, VerifyingKey, ProvingKey};
-use ark_snark::{SNARK, CircuitSpecificSetupSNARK};
-use ark_ff::{PrimeField, BigInteger};
-use ark_std::rand::{Rng, CryptoRng};
-use std::fs::File;
-pub use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use ark_circom::{CircomBuilder, CircomConfig, WitnessCalculator};
+use ark_ff::{BigInteger, PrimeField};
+use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+pub use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
+use ark_std::rand::{CryptoRng, Rng};
 use memmap2::Mmap;
-use ark_circom::{CircomConfig, CircomBuilder, WitnessCalculator};
+use std::fs::File;
 
 pub fn load_or_generate_keys<R: Rng + CryptoRng>(
     r1cs_path: &str,
@@ -18,7 +18,8 @@ pub fn load_or_generate_keys<R: Rng + CryptoRng>(
     rng: &mut R,
 ) -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>), Box<dyn std::error::Error>> {
     // Try to load from cache if both files exist
-    if std::path::Path::new(pk_cache_path).exists() && std::path::Path::new(vk_cache_path).exists() {
+    if std::path::Path::new(pk_cache_path).exists() && std::path::Path::new(vk_cache_path).exists()
+    {
         log::info!("Loading cached keys from {pk_cache_path} and {vk_cache_path}");
         match (|| -> Result<_, Box<dyn std::error::Error>> {
             let pk_file = File::open(pk_cache_path)?;
@@ -62,7 +63,9 @@ pub fn load_or_generate_keys<R: Rng + CryptoRng>(
         std::fs::create_dir_all(parent)?;
     }
 
-    log::info!("Caching keys to {pk_cache_path} and {vk_cache_path} (uncompressed for faster loading)...");
+    log::info!(
+        "Caching keys to {pk_cache_path} and {vk_cache_path} (uncompressed for faster loading)..."
+    );
     let mut pk_file = File::create(pk_cache_path)?;
     let mut vk_file = File::create(vk_cache_path)?;
     pk.serialize_uncompressed(&mut pk_file)?;
@@ -111,7 +114,10 @@ pub unsafe fn load_keys_unsafe_mmap(
 
     // Deserialize from mmap (this is the unsafe part - assumes file is valid)
     let pk = ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&pk_mmap[..])?;
-    log::info!("Proving key deserialized in {:.2}s", start.elapsed().as_secs_f64());
+    log::info!(
+        "Proving key deserialized in {:.2}s",
+        start.elapsed().as_secs_f64()
+    );
 
     let vk_start = std::time::Instant::now();
 
@@ -120,10 +126,16 @@ pub unsafe fn load_keys_unsafe_mmap(
     let vk_mmap = Mmap::map(&vk_file)?;
 
     let vk = VerifyingKey::<Bn254>::deserialize_uncompressed_unchecked(&vk_mmap[..])?;
-    log::info!("Verifying key deserialized in {:.2}s", vk_start.elapsed().as_secs_f64());
+    log::info!(
+        "Verifying key deserialized in {:.2}s",
+        vk_start.elapsed().as_secs_f64()
+    );
 
     let total_time = start.elapsed();
-    log::info!("Total mmap loading time: {:.2}s (vs ~30-60s with normal loading)", total_time.as_secs_f64());
+    log::info!(
+        "Total mmap loading time: {:.2}s (vs ~30-60s with normal loading)",
+        total_time.as_secs_f64()
+    );
 
     Ok((pk, vk))
 }
@@ -167,13 +179,27 @@ impl ShufflePublicInputs {
         let dummy_output = self.pk[0] * self.pk[1];
         inputs.push(dummy_output);
         // Then all the declared public inputs
-        for f in &self.pk { inputs.push(*f); }
-        for f in &self.ux0 { inputs.push(*f); }
-        for f in &self.ux1 { inputs.push(*f); }
-        for f in &self.vx0 { inputs.push(*f); }
-        for f in &self.vx1 { inputs.push(*f); }
-        for f in &self.s_u { inputs.push(*f); }
-        for f in &self.s_v { inputs.push(*f); }
+        for f in &self.pk {
+            inputs.push(*f);
+        }
+        for f in &self.ux0 {
+            inputs.push(*f);
+        }
+        for f in &self.ux1 {
+            inputs.push(*f);
+        }
+        for f in &self.vx0 {
+            inputs.push(*f);
+        }
+        for f in &self.vx1 {
+            inputs.push(*f);
+        }
+        for f in &self.s_u {
+            inputs.push(*f);
+        }
+        for f in &self.s_v {
+            inputs.push(*f);
+        }
         inputs
     }
 
@@ -190,7 +216,6 @@ impl ShufflePublicInputs {
     }
 }
 
-
 /// Rapidsnark proof structure matching snarkjs output
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct RapidsnarkProof {
@@ -204,7 +229,9 @@ pub struct RapidsnarkProof {
 }
 
 /// Convert witness Vec<BigInt> to .wtns binary format for rapidsnark
-fn witness_bigints_to_wtns(witness: &[num_bigint::BigInt]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn witness_bigints_to_wtns(
+    witness: &[num_bigint::BigInt],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // .wtns format:
     // - 4 bytes: "wtns" magic
     // - 4 bytes: version (1)
@@ -278,7 +305,8 @@ pub fn generate_shuffle_proof_rapidsnark(
         "../../../circuits/circuit-artifacts/wasm/encrypt.wasm",
     ];
 
-    let wasm_path = possible_paths.iter()
+    let wasm_path = possible_paths
+        .iter()
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Could not find encrypt.wasm in any expected location")?;
 
@@ -307,11 +335,17 @@ pub fn generate_shuffle_proof_rapidsnark(
 
     // Generate witness
     let witness_bigints = calculator.calculate_witness(&mut store, inputs, false)?;
-    log::info!("Witness generated ({} elements), converting to .wtns format", witness_bigints.len());
+    log::info!(
+        "Witness generated ({} elements), converting to .wtns format",
+        witness_bigints.len()
+    );
 
     // Convert witness BigInts to .wtns binary format
     let wtns_bytes = witness_bigints_to_wtns(&witness_bigints)?;
-    log::info!("Witness serialized ({} bytes), using rapidsnark for proof", wtns_bytes.len());
+    log::info!(
+        "Witness serialized ({} bytes), using rapidsnark for proof",
+        wtns_bytes.len()
+    );
 
     // Use rapidsnark for FAST proof generation
     let possible_zkey_paths = [
@@ -320,13 +354,15 @@ pub fn generate_shuffle_proof_rapidsnark(
         "../../../circuits/circuit-artifacts/zkey/encrypt.zkey",
     ];
 
-    let zkey_path = possible_zkey_paths.iter()
+    let zkey_path = possible_zkey_paths
+        .iter()
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Could not find encrypt.zkey in any expected location")?;
 
     log::info!("Using zkey: {zkey_path}");
-    let rapidsnark_result = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
-        .map_err(|e| format!("Rapidsnark proof generation failed: {e}"))?;
+    let rapidsnark_result =
+        rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
+            .map_err(|e| format!("Rapidsnark proof generation failed: {e}"))?;
 
     log::info!("Rapidsnark proof generated successfully");
 
@@ -339,18 +375,19 @@ pub fn generate_shuffle_proof_rapidsnark(
 pub struct RevealPublicInputs {
     pub y: [Bn254Fr; 4],
     pub pk_p: [Bn254Fr; 2],
-    pub out: [Bn254Fr; 2],  // The decryption output (partial decryption)
+    pub out: [Bn254Fr; 2], // The decryption output (partial decryption)
 }
 
 impl RevealPublicInputs {
-    pub fn from_babyjubjub(
-        y: [Fq; 4],
-        pk_p: [Fq; 2],
-        out: [Fq; 2],
-    ) -> Self {
+    pub fn from_babyjubjub(y: [Fq; 4], pk_p: [Fq; 2], out: [Fq; 2]) -> Self {
         let convert = |f: &Fq| Bn254Fr::from_le_bytes_mod_order(&f.into_bigint().to_bytes_le());
         Self {
-            y: [convert(&y[0]), convert(&y[1]), convert(&y[2]), convert(&y[3])],
+            y: [
+                convert(&y[0]),
+                convert(&y[1]),
+                convert(&y[2]),
+                convert(&y[3]),
+            ],
             pk_p: [convert(&pk_p[0]), convert(&pk_p[1])],
             out: [convert(&out[0]), convert(&out[1])],
         }
@@ -359,10 +396,16 @@ impl RevealPublicInputs {
     pub fn to_ark_public_inputs(&self) -> Vec<Bn254Fr> {
         let mut inputs = Vec::new();
         // Circuit outputs come first
-        for f in &self.out { inputs.push(*f); }
+        for f in &self.out {
+            inputs.push(*f);
+        }
         // Then the declared public inputs
-        for f in &self.y { inputs.push(*f); }
-        for f in &self.pk_p { inputs.push(*f); }
+        for f in &self.y {
+            inputs.push(*f);
+        }
+        for f in &self.pk_p {
+            inputs.push(*f);
+        }
         inputs
     }
 }
@@ -383,7 +426,8 @@ pub fn generate_reveal_proof_rapidsnark(
         "../../../circuits/circuit-artifacts/wasm/decrypt.wasm",
     ];
 
-    let wasm_path = possible_paths.iter()
+    let wasm_path = possible_paths
+        .iter()
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Could not find decrypt.wasm in any expected location")?;
 
@@ -398,13 +442,22 @@ pub fn generate_reveal_proof_rapidsnark(
         num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &f.into_bigint().to_bytes_le())
     };
 
-    inputs.push(("Y".to_string(), public_inputs.y.iter().map(convert_to_bigint).collect()));
-    inputs.push(("pkP".to_string(), public_inputs.pk_p.iter().map(convert_to_bigint).collect()));
+    inputs.push((
+        "Y".to_string(),
+        public_inputs.y.iter().map(convert_to_bigint).collect(),
+    ));
+    inputs.push((
+        "pkP".to_string(),
+        public_inputs.pk_p.iter().map(convert_to_bigint).collect(),
+    ));
     inputs.push(("skP".to_string(), vec![convert_to_bigint(&sk_p)]));
 
     // Generate witness
     let witness_bigints = calculator.calculate_witness(&mut store, inputs, false)?;
-    log::info!("Reveal witness generated ({} elements), converting to .wtns format", witness_bigints.len());
+    log::info!(
+        "Reveal witness generated ({} elements), converting to .wtns format",
+        witness_bigints.len()
+    );
 
     // Convert witness to .wtns binary format
     let wtns_bytes = witness_bigints_to_wtns(&witness_bigints)?;
@@ -417,12 +470,14 @@ pub fn generate_reveal_proof_rapidsnark(
         "../../../circuits/circuit-artifacts/zkey/decrypt.zkey",
     ];
 
-    let zkey_path = possible_zkey_paths.iter()
+    let zkey_path = possible_zkey_paths
+        .iter()
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Could not find decrypt.zkey in any expected location")?;
 
-    let rapidsnark_result = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
-        .map_err(|e| format!("Rapidsnark reveal proof generation failed: {e}"))?;
+    let rapidsnark_result =
+        rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_bytes)
+            .map_err(|e| format!("Rapidsnark reveal proof generation failed: {e}"))?;
 
     log::info!("Rapidsnark reveal proof generated successfully");
 
@@ -473,7 +528,9 @@ pub fn verify_reveal_proof_rapidsnark(
 }
 
 /// Parse rapidsnark/snarkjs proof JSON to arkworks format
-fn parse_rapidsnark_proof(proof: &RapidsnarkProof) -> Result<Proof<Bn254>, Box<dyn std::error::Error>> {
+fn parse_rapidsnark_proof(
+    proof: &RapidsnarkProof,
+) -> Result<Proof<Bn254>, Box<dyn std::error::Error>> {
     use ark_bn254::{Fq, Fq2, G1Affine, G2Affine};
 
     // Helper to parse decimal string to field element
@@ -507,7 +564,9 @@ fn parse_rapidsnark_proof(proof: &RapidsnarkProof) -> Result<Proof<Bn254>, Box<d
 }
 
 /// Parse snarkjs verification key JSON to arkworks format
-fn parse_snarkjs_vkey(vkey: &serde_json::Value) -> Result<VerifyingKey<Bn254>, Box<dyn std::error::Error>> {
+fn parse_snarkjs_vkey(
+    vkey: &serde_json::Value,
+) -> Result<VerifyingKey<Bn254>, Box<dyn std::error::Error>> {
     use ark_bn254::{Fq, Fq2, G1Affine, G2Affine};
 
     // Helper to parse decimal string to field element

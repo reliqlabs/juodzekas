@@ -1,14 +1,16 @@
 // TODO: Add insurance logic
 mod card;
-mod rules;
-mod hand;
-mod game_state;
 #[cfg(feature = "edge")]
 mod edge;
+mod game_state;
+mod hand;
+mod rules;
 
 pub use card::Card;
-pub use rules::{GameRules, PayoutRatio, DoubleRestriction};
-pub use hand::{Hand, HandOutcome, calculate_hand_value, is_soft_hand, is_busted, is_blackjack, can_split_cards};
-pub use game_state::{GameState, Spot, TurnOwner, GamePhase};
 #[cfg(feature = "edge")]
 pub use edge::{EdgeCalculator, EdgeResult};
+pub use game_state::{GamePhase, GameState, Spot, TurnOwner};
+pub use hand::{
+    calculate_hand_value, can_split_cards, is_blackjack, is_busted, is_soft_hand, Hand, HandOutcome,
+};
+pub use rules::{DoubleRestriction, GameRules, PayoutRatio};

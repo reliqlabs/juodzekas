@@ -1,9 +1,12 @@
-use cosmwasm_std::{Addr, Binary, DepsMut, Env, MessageInfo, Order, Response, StdError, Uint128};
 use crate::error::ContractError;
 use crate::game_logic::{config_to_rules, to_blackjack_state};
 use crate::msg::ExecuteMsg;
-use crate::state::{GameSession, GameStatus, Hand, HandStatus, TurnOwner, CONFIG, DEALER, DEALER_BALANCE, GAMES, GAME_COUNTER};
+use crate::state::{
+    GameSession, GameStatus, Hand, HandStatus, TurnOwner, CONFIG, DEALER, DEALER_BALANCE, GAMES,
+    GAME_COUNTER,
+};
 use crate::zk::xion_zk_verify;
+use cosmwasm_std::{Addr, Binary, DepsMut, Env, MessageInfo, Order, Response, StdError, Uint128};
 
 /// Reject messages that send unexpected funds
 fn no_funds(info: &MessageInfo) -> Result<(), ContractError> {
@@ -36,28 +39,56 @@ pub fn execute(
             shuffled_deck,
             proof,
             public_inputs,
-        } => execute_create_game(deps, _env, info, public_key, shuffled_deck, proof, public_inputs),
+        } => execute_create_game(
+            deps,
+            _env,
+            info,
+            public_key,
+            shuffled_deck,
+            proof,
+            public_inputs,
+        ),
         ExecuteMsg::JoinGame {
             bet,
             public_key,
             shuffled_deck,
             proof,
             public_inputs,
-        } => execute_join_game(deps, _env, info, bet, public_key, shuffled_deck, proof, public_inputs),
+        } => execute_join_game(
+            deps,
+            _env,
+            info,
+            bet,
+            public_key,
+            shuffled_deck,
+            proof,
+            public_inputs,
+        ),
         ExecuteMsg::Hit { game_id } => execute_hit(deps, _env, info, game_id),
         ExecuteMsg::Stand { game_id } => execute_stand(deps, _env, info, game_id),
         ExecuteMsg::DoubleDown { game_id } => execute_double_down(deps, _env, info, game_id),
         ExecuteMsg::Split { game_id } => execute_split(deps, _env, info, game_id),
         ExecuteMsg::Surrender { game_id } => execute_surrender(deps, _env, info, game_id),
         ExecuteMsg::Insurance { game_id } => execute_insurance(deps, _env, info, game_id),
-        ExecuteMsg::DeclineInsurance { game_id } => execute_decline_insurance(deps, _env, info, game_id),
+        ExecuteMsg::DeclineInsurance { game_id } => {
+            execute_decline_insurance(deps, _env, info, game_id)
+        }
         ExecuteMsg::SubmitReveal {
             game_id,
             card_index,
             partial_decryption,
             proof,
             public_inputs,
-        } => execute_submit_reveal(deps, _env, info, game_id, card_index, partial_decryption, proof, public_inputs),
+        } => execute_submit_reveal(
+            deps,
+            _env,
+            info,
+            game_id,
+            card_index,
+            partial_decryption,
+            proof,
+            public_inputs,
+        ),
         ExecuteMsg::CancelGame { game_id } => execute_cancel_game(deps, info, game_id),
         ExecuteMsg::ClaimTimeout { game_id } => execute_claim_timeout(deps, _env, info, game_id),
         ExecuteMsg::SweepSettled { game_ids } => execute_sweep_settled(deps, _env, game_ids),
@@ -81,32 +112,43 @@ pub fn execute_create_game(
 
     // Only the contract's dealer can create games
     if info.sender != dealer {
-        return Err(ContractError::Std(StdError::msg("Only the dealer can create games")));
+        return Err(ContractError::Std(StdError::msg(
+            "Only the dealer can create games",
+        )));
     }
 
     if shuffled_deck.len() != 52 {
-        return Err(ContractError::Std(StdError::msg("Deck must contain exactly 52 cards")));
+        return Err(ContractError::Std(StdError::msg(
+            "Deck must contain exactly 52 cards",
+        )));
     }
 
     // Verify dealer's shuffle proof
     let verified = xion_zk_verify(deps.as_ref(), &config.shuffle_vk_id, proof, public_inputs)?;
     if !verified {
-        return Err(ContractError::Std(StdError::msg("Invalid dealer shuffle proof")));
+        return Err(ContractError::Std(StdError::msg(
+            "Invalid dealer shuffle proof",
+        )));
     }
 
     // Dealer must have sufficient bankroll (10x max bet)
-    let required_bankroll = config.max_bet.checked_mul(Uint128::new(10))
+    let required_bankroll = config
+        .max_bet
+        .checked_mul(Uint128::new(10))
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
 
     // Load existing dealer balance and add any sent funds
     let mut dealer_balance = DEALER_BALANCE.load(deps.storage)?;
 
-    let deposited: Uint128 = info.funds.iter()
+    let deposited: Uint128 = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| Uint128::try_from(c.amount).unwrap_or(Uint128::MAX))
         .unwrap_or(Uint128::zero());
 
-    dealer_balance = dealer_balance.checked_add(deposited)
+    dealer_balance = dealer_balance
+        .checked_add(deposited)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
 
     if dealer_balance < required_bankroll {
@@ -116,13 +158,15 @@ pub fn execute_create_game(
     }
 
     // Deduct bankroll from dealer balance
-    dealer_balance = dealer_balance.checked_sub(required_bankroll)
+    dealer_balance = dealer_balance
+        .checked_sub(required_bankroll)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &dealer_balance)?;
 
     // Generate new game ID
     let game_id = GAME_COUNTER.load(deps.storage)?;
-    let next_id = game_id.checked_add(1)
+    let next_id = game_id
+        .checked_add(1)
         .ok_or_else(|| ContractError::Std(StdError::msg("Game counter overflow")))?;
     GAME_COUNTER.save(deps.storage, &next_id)?;
 
@@ -181,7 +225,9 @@ pub fn execute_join_game(
     }
 
     if shuffled_deck.len() != 52 {
-        return Err(ContractError::Std(StdError::msg("Deck must contain exactly 52 cards")));
+        return Err(ContractError::Std(StdError::msg(
+            "Deck must contain exactly 52 cards",
+        )));
     }
 
     // Auto-find first WaitingForPlayerJoin game
@@ -199,17 +245,23 @@ pub fn execute_join_game(
 
     // Dealer cannot join own game (self-play)
     if info.sender == game.dealer {
-        return Err(ContractError::Std(StdError::msg("Dealer cannot join own game")));
+        return Err(ContractError::Std(StdError::msg(
+            "Dealer cannot join own game",
+        )));
     }
 
     // Verify player's re-shuffle proof
     let verified = xion_zk_verify(deps.as_ref(), &config.shuffle_vk_id, proof, public_inputs)?;
     if !verified {
-        return Err(ContractError::Std(StdError::msg("Invalid player shuffle proof")));
+        return Err(ContractError::Std(StdError::msg(
+            "Invalid player shuffle proof",
+        )));
     }
 
     // Player must deposit exact bet in correct denom
-    let deposited = info.funds.iter()
+    let deposited = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| c.amount)
         .unwrap_or(cosmwasm_std::Uint256::zero());
@@ -251,8 +303,12 @@ pub fn execute_join_game(
         .add_attribute("bet", bet))
 }
 
-
-pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_hit(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     no_funds(&info)?;
     let config = CONFIG.load(deps.storage)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -284,7 +340,9 @@ pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> 
         if let Some(&first_card) = hand.cards.first() {
             let rank = (first_card % 13) + 1;
             if rank == 1 && hand.cards.len() == 2 {
-                return Err(ContractError::Std(StdError::msg("Cannot hit on split aces")));
+                return Err(ContractError::Std(StdError::msg(
+                    "Cannot hit on split aces",
+                )));
             }
         }
     }
@@ -309,7 +367,12 @@ pub fn execute_hit(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> 
         .add_attribute("hand_index", game.current_hand_index.to_string()))
 }
 
-pub fn execute_stand(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_stand(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     no_funds(&info)?;
     let config = CONFIG.load(deps.storage)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -348,7 +411,12 @@ pub fn execute_stand(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -
     Ok(response)
 }
 
-pub fn execute_double_down(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_double_down(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     only_denom(&info, &config.denom)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -374,7 +442,9 @@ pub fn execute_double_down(deps: DepsMut, env: Env, info: MessageInfo, game_id: 
     }
     let hand = &mut game.hands[hand_idx];
     let additional_bet = hand.bet;
-    let deposited: Uint128 = info.funds.iter()
+    let deposited: Uint128 = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| Uint128::try_from(c.amount).unwrap_or(Uint128::MAX))
         .unwrap_or(Uint128::zero());
@@ -385,7 +455,10 @@ pub fn execute_double_down(deps: DepsMut, env: Env, info: MessageInfo, game_id: 
     }
 
     // Double the bet
-    hand.bet = hand.bet.checked_add(additional_bet).map_err(|e| StdError::msg(e.to_string()))?;
+    hand.bet = hand
+        .bet
+        .checked_add(additional_bet)
+        .map_err(|e| StdError::msg(e.to_string()))?;
     hand.status = HandStatus::Doubled;
 
     // Request exactly one card and transition to dealer turn
@@ -410,7 +483,12 @@ pub fn execute_double_down(deps: DepsMut, env: Env, info: MessageInfo, game_id: 
         .add_attribute("requested_card", card_to_reveal.to_string()))
 }
 
-pub fn execute_surrender(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_surrender(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     no_funds(&info)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
     let config = CONFIG.load(deps.storage)?;
@@ -424,7 +502,9 @@ pub fn execute_surrender(deps: DepsMut, env: Env, info: MessageInfo, game_id: u6
 
     // Block surrender after split — accounting only handles single-hand games
     if game.hands.len() > 1 {
-        return Err(ContractError::Std(StdError::msg("Surrender not allowed after split")));
+        return Err(ContractError::Std(StdError::msg(
+            "Surrender not allowed after split",
+        )));
     }
 
     // Use blackjack package to validate if surrender is allowed
@@ -437,16 +517,24 @@ pub fn execute_surrender(deps: DepsMut, env: Env, info: MessageInfo, game_id: u6
     let hand = &mut game.hands[game.current_hand_index as usize];
 
     // Settlement: return half the bet to player
-    let refund_amount = hand.bet.checked_div(Uint128::new(2)).map_err(|e| StdError::msg(e.to_string()))?;
+    let refund_amount = hand
+        .bet
+        .checked_div(Uint128::new(2))
+        .map_err(|e| StdError::msg(e.to_string()))?;
 
     // Credit dealer: bankroll + player's bet + lost insurance - player's refund
     let insurance_bet = game.insurance_bet.unwrap_or(Uint128::zero());
-    let dealer_credit = game.bankroll
-        .checked_add(hand.bet).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
-        .checked_add(insurance_bet).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
-        .checked_sub(refund_amount).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+    let dealer_credit = game
+        .bankroll
+        .checked_add(hand.bet)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_add(insurance_bet)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_sub(refund_amount)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     let mut dealer_balance = DEALER_BALANCE.load(deps.storage)?;
-    dealer_balance = dealer_balance.checked_add(dealer_credit)
+    dealer_balance = dealer_balance
+        .checked_add(dealer_credit)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &dealer_balance)?;
 
@@ -477,7 +565,12 @@ pub fn execute_surrender(deps: DepsMut, env: Env, info: MessageInfo, game_id: u6
     Ok(response)
 }
 
-pub fn execute_split(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_split(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     only_denom(&info, &config.denom)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -500,7 +593,9 @@ pub fn execute_split(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -
     let original_bet = game.hands[hand_index].bet;
 
     // Player must send exact additional bet equal to original hand bet for the new split hand
-    let deposited: Uint128 = info.funds.iter()
+    let deposited: Uint128 = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| Uint128::try_from(c.amount).unwrap_or(Uint128::MAX))
         .unwrap_or(Uint128::zero());
@@ -542,10 +637,18 @@ pub fn execute_split(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -
     Ok(Response::new()
         .add_attribute("action", "split")
         .add_attribute("player", info.sender)
-        .add_attribute("requested_cards", format!("{card_to_reveal_1}, {card_to_reveal_2}")))
+        .add_attribute(
+            "requested_cards",
+            format!("{card_to_reveal_1}, {card_to_reveal_2}"),
+        ))
 }
 
-pub fn execute_insurance(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_insurance(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     only_denom(&info, &config.denom)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -554,13 +657,19 @@ pub fn execute_insurance(deps: DepsMut, env: Env, info: MessageInfo, game_id: u6
         return Err(ContractError::Std(StdError::msg("Not authorized")));
     }
     if game.status != GameStatus::OfferingInsurance {
-        return Err(ContractError::Std(StdError::msg("Insurance not being offered")));
+        return Err(ContractError::Std(StdError::msg(
+            "Insurance not being offered",
+        )));
     }
 
-    let insurance_amount = game.bet.checked_div(Uint128::new(2))
+    let insurance_amount = game
+        .bet
+        .checked_div(Uint128::new(2))
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
 
-    let deposited = info.funds.iter()
+    let deposited = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| c.amount)
         .unwrap_or(cosmwasm_std::Uint256::zero());
@@ -586,7 +695,12 @@ pub fn execute_insurance(deps: DepsMut, env: Env, info: MessageInfo, game_id: u6
         .add_attribute("insurance_amount", insurance_amount))
 }
 
-pub fn execute_decline_insurance(deps: DepsMut, env: Env, info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_decline_insurance(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     no_funds(&info)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
 
@@ -594,7 +708,9 @@ pub fn execute_decline_insurance(deps: DepsMut, env: Env, info: MessageInfo, gam
         return Err(ContractError::Std(StdError::msg("Not authorized")));
     }
     if game.status != GameStatus::OfferingInsurance {
-        return Err(ContractError::Std(StdError::msg("Insurance not being offered")));
+        return Err(ContractError::Std(StdError::msg(
+            "Insurance not being offered",
+        )));
     }
 
     game.status = GameStatus::WaitingForReveal {
@@ -620,17 +736,22 @@ pub fn execute_cancel_game(
     no_funds(&info)?;
     let dealer = DEALER.load(deps.storage)?;
     if info.sender != dealer {
-        return Err(ContractError::Std(StdError::msg("Only the dealer can cancel games")));
+        return Err(ContractError::Std(StdError::msg(
+            "Only the dealer can cancel games",
+        )));
     }
 
     let game = GAMES.load(deps.storage, game_id)?;
     if game.status != GameStatus::WaitingForPlayerJoin {
-        return Err(ContractError::Std(StdError::msg("Can only cancel games waiting for a player")));
+        return Err(ContractError::Std(StdError::msg(
+            "Can only cancel games waiting for a player",
+        )));
     }
 
     // Return bankroll to dealer balance
     let mut dealer_balance = DEALER_BALANCE.load(deps.storage)?;
-    dealer_balance = dealer_balance.checked_add(game.bankroll)
+    dealer_balance = dealer_balance
+        .checked_add(game.bankroll)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &dealer_balance)?;
 
@@ -642,7 +763,12 @@ pub fn execute_cancel_game(
         .add_attribute("returned_bankroll", game.bankroll))
 }
 
-pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_id: u64) -> Result<Response, ContractError> {
+pub fn execute_claim_timeout(
+    deps: DepsMut,
+    env: Env,
+    _info: MessageInfo,
+    game_id: u64,
+) -> Result<Response, ContractError> {
     no_funds(&_info)?;
     let config = CONFIG.load(deps.storage)?;
     let mut game = GAMES.load(deps.storage, game_id)?;
@@ -669,10 +795,16 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_i
     // During WaitingForReveal, both parties must submit — check pending_reveals to
     // see who submitted more partials; the lagging party is the blocker.
     let blocker = if matches!(&game.status, GameStatus::WaitingForReveal { .. }) {
-        let player_count = game.pending_reveals.iter()
-            .filter(|pr| pr.player_partial.is_some()).count();
-        let dealer_count = game.pending_reveals.iter()
-            .filter(|pr| pr.dealer_partial.is_some()).count();
+        let player_count = game
+            .pending_reveals
+            .iter()
+            .filter(|pr| pr.player_partial.is_some())
+            .count();
+        let dealer_count = game
+            .pending_reveals
+            .iter()
+            .filter(|pr| pr.dealer_partial.is_some())
+            .count();
         if player_count > dealer_count {
             crate::state::TurnOwner::Dealer // dealer is lagging
         } else if dealer_count > player_count {
@@ -687,7 +819,9 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_i
     let (player_payout, dealer_credit, winner) = match blocker {
         crate::state::TurnOwner::Player => {
             // Player failed to act, dealer wins: gets bankroll + all player bets + insurance
-            let credit = game.bankroll.checked_add(total_bets)
+            let credit = game
+                .bankroll
+                .checked_add(total_bets)
                 .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
                 .checked_add(insurance_bet)
                 .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
@@ -695,7 +829,8 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_i
         }
         crate::state::TurnOwner::Dealer => {
             // Dealer failed to act, player wins 2x bets + insurance back
-            let payout = total_bets.checked_mul(Uint128::new(2))
+            let payout = total_bets
+                .checked_mul(Uint128::new(2))
                 .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
                 .checked_add(insurance_bet)
                 .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
@@ -712,12 +847,15 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_i
 
     // Credit dealer balance
     let mut dealer_balance = DEALER_BALANCE.load(deps.storage)?;
-    dealer_balance = dealer_balance.checked_add(dealer_credit)
+    dealer_balance = dealer_balance
+        .checked_add(dealer_credit)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &dealer_balance)?;
 
     // Mark game as settled instead of removing
-    game.status = GameStatus::Settled { winner: winner.to_string() };
+    game.status = GameStatus::Settled {
+        winner: winner.to_string(),
+    };
     game.current_turn = crate::state::TurnOwner::None;
     game.last_action_timestamp = current_time;
     GAMES.save(deps.storage, game_id, &game)?;
@@ -741,9 +879,15 @@ pub fn execute_claim_timeout(deps: DepsMut, env: Env, _info: MessageInfo, game_i
     Ok(response)
 }
 
-pub fn execute_sweep_settled(deps: DepsMut, env: Env, game_ids: Vec<u64>) -> Result<Response, ContractError> {
+pub fn execute_sweep_settled(
+    deps: DepsMut,
+    env: Env,
+    game_ids: Vec<u64>,
+) -> Result<Response, ContractError> {
     if game_ids.len() > 50 {
-        return Err(ContractError::Std(StdError::msg("Cannot sweep more than 50 games at once")));
+        return Err(ContractError::Std(StdError::msg(
+            "Cannot sweep more than 50 games at once",
+        )));
     }
     let config = CONFIG.load(deps.storage)?;
     let now = env.block.time.seconds();
@@ -757,7 +901,11 @@ pub fn execute_sweep_settled(deps: DepsMut, env: Env, game_ids: Vec<u64>) -> Res
         if !matches!(game.status, GameStatus::Settled { .. }) {
             continue;
         }
-        if game.last_action_timestamp.saturating_add(config.timeout_seconds) > now {
+        if game
+            .last_action_timestamp
+            .saturating_add(config.timeout_seconds)
+            > now
+        {
             continue;
         }
         GAMES.remove(deps.storage, *game_id);
@@ -778,10 +926,14 @@ pub fn execute_deposit_bankroll(
     let dealer = DEALER.load(deps.storage)?;
 
     if info.sender != dealer {
-        return Err(ContractError::Std(StdError::msg("Only the dealer can deposit bankroll")));
+        return Err(ContractError::Std(StdError::msg(
+            "Only the dealer can deposit bankroll",
+        )));
     }
 
-    let deposited: Uint128 = info.funds.iter()
+    let deposited: Uint128 = info
+        .funds
+        .iter()
         .find(|c| c.denom == config.denom)
         .map(|c| Uint128::try_from(c.amount).unwrap_or(Uint128::MAX))
         .unwrap_or(Uint128::zero());
@@ -791,7 +943,8 @@ pub fn execute_deposit_bankroll(
     }
 
     let mut balance = DEALER_BALANCE.load(deps.storage)?;
-    balance = balance.checked_add(deposited)
+    balance = balance
+        .checked_add(deposited)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &balance)?;
 
@@ -810,7 +963,9 @@ pub fn execute_withdraw_bankroll(
     let dealer = DEALER.load(deps.storage)?;
 
     if info.sender != dealer {
-        return Err(ContractError::Std(StdError::msg("Only the dealer can withdraw bankroll")));
+        return Err(ContractError::Std(StdError::msg(
+            "Only the dealer can withdraw bankroll",
+        )));
     }
 
     // Block withdrawal if any unsettled game exists (including WaitingForPlayerJoin).
@@ -826,7 +981,7 @@ pub fn execute_withdraw_bankroll(
         });
     if has_unsettled {
         return Err(ContractError::Std(StdError::msg(
-            "Cannot withdraw while unsettled games exist. Cancel waiting games first."
+            "Cannot withdraw while unsettled games exist. Cancel waiting games first.",
         )));
     }
 
@@ -843,7 +998,8 @@ pub fn execute_withdraw_bankroll(
         ))));
     }
 
-    let new_balance = balance.checked_sub(withdraw_amount)
+    let new_balance = balance
+        .checked_sub(withdraw_amount)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(deps.storage, &new_balance)?;
 

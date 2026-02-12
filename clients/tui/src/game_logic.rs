@@ -6,8 +6,8 @@
 //! This module provides conversion functions to use blackjack package logic
 //! while maintaining TUI's cryptographic operations
 
-use blackjack::{GameState as BlackjackState, Spot, Hand, Card, TurnOwner, GamePhase};
 use crate::game::GameState as TuiGameState;
+use blackjack::{Card, GamePhase, GameState as BlackjackState, Hand, Spot, TurnOwner};
 
 impl TuiGameState {
     /// Convert TUI state to blackjack state for game logic operations

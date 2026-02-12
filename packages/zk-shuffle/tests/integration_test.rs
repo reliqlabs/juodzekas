@@ -1,16 +1,16 @@
-use zk_shuffle::elgamal::{KeyPair, encrypt, decrypt, Ciphertext};
-use zk_shuffle::shuffle::shuffle;
-use zk_shuffle::decrypt::reveal_card;
-use zk_shuffle::babyjubjub::{Point, Fr};
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_std::UniformRand;
-use ark_ec::{CurveGroup, AffineRepr};
-use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use std::time::Instant;
+use zk_shuffle::babyjubjub::{Fr, Point};
+use zk_shuffle::decrypt::reveal_card;
+use zk_shuffle::elgamal::{decrypt, encrypt, Ciphertext, KeyPair};
+use zk_shuffle::shuffle::shuffle;
 
 use zk_shuffle::proof::{
-    generate_shuffle_proof_rapidsnark, verify_shuffle_proof_rapidsnark,
-    generate_reveal_proof_rapidsnark, verify_reveal_proof_rapidsnark,
+    generate_reveal_proof_rapidsnark, generate_shuffle_proof_rapidsnark,
+    verify_reveal_proof_rapidsnark, verify_shuffle_proof_rapidsnark,
 };
 
 #[tokio::test]
@@ -44,10 +44,13 @@ async fn test_rapidsnark_shuffle_and_reveal() {
         cards.push(card_point);
     }
 
-    let deck: Vec<Ciphertext> = cards.iter().map(|m| {
-        let r = Fr::rand(&mut rng);
-        encrypt(&aggregated_pk, m, &r)
-    }).collect();
+    let deck: Vec<Ciphertext> = cards
+        .iter()
+        .map(|m| {
+            let r = Fr::rand(&mut rng);
+            encrypt(&aggregated_pk, m, &r)
+        })
+        .collect();
 
     // 5. Alice shuffles
     let mut deck = deck;
@@ -55,7 +58,10 @@ async fn test_rapidsnark_shuffle_and_reveal() {
     deck = alice_shuffle.deck;
 
     let setup_time = setup_start.elapsed();
-    println!("[TEST] Setup complete (keys, deck encryption). Time: {:.2}s", setup_time.as_secs_f64());
+    println!(
+        "[TEST] Setup complete (keys, deck encryption). Time: {:.2}s",
+        setup_time.as_secs_f64()
+    );
 
     // Alice's Shuffle Proof Generation & Verification (using rapidsnark)
     println!("[TEST] Generating Alice's Shuffle Proof with rapidsnark...");
@@ -72,15 +78,22 @@ async fn test_rapidsnark_shuffle_and_reveal() {
     };
 
     let alice_proof_gen_time = alice_shuffle_start.elapsed();
-    println!("[TEST] Alice's Shuffle Proof generated successfully! Time: {:.2}s", alice_proof_gen_time.as_secs_f64());
+    println!(
+        "[TEST] Alice's Shuffle Proof generated successfully! Time: {:.2}s",
+        alice_proof_gen_time.as_secs_f64()
+    );
 
     println!("[TEST] Verifying Alice's Shuffle Proof...");
     let alice_verify_start = Instant::now();
-    match verify_shuffle_proof_rapidsnark(shuffle_vkey, &alice_proof, &alice_shuffle.public_inputs) {
+    match verify_shuffle_proof_rapidsnark(shuffle_vkey, &alice_proof, &alice_shuffle.public_inputs)
+    {
         Ok(true) => {
             let alice_verify_time = alice_verify_start.elapsed();
-            println!("[TEST] Alice's Shuffle Proof verified successfully! Time: {:.2}s", alice_verify_time.as_secs_f64());
-        },
+            println!(
+                "[TEST] Alice's Shuffle Proof verified successfully! Time: {:.2}s",
+                alice_verify_time.as_secs_f64()
+            );
+        }
         Ok(false) => panic!("[ERROR] Alice's Shuffle Proof verification returned false!"),
         Err(e) => {
             eprintln!("[ERROR] Alice's Shuffle Proof verification failed: {e:?}");
@@ -95,14 +108,19 @@ async fn test_rapidsnark_shuffle_and_reveal() {
     // Bob's Shuffle Proof Generation & Verification
     println!("[TEST] Generating Bob's Shuffle Proof with rapidsnark...");
     let bob_shuffle_start = Instant::now();
-    let bob_proof = generate_shuffle_proof_rapidsnark(
-        &bob_shuffle.public_inputs,
-        bob_shuffle.private_inputs,
-    ).expect("Failed to generate Bob's shuffle proof");
+    let bob_proof =
+        generate_shuffle_proof_rapidsnark(&bob_shuffle.public_inputs, bob_shuffle.private_inputs)
+            .expect("Failed to generate Bob's shuffle proof");
 
-    assert!(verify_shuffle_proof_rapidsnark(shuffle_vkey, &bob_proof, &bob_shuffle.public_inputs).unwrap());
+    assert!(
+        verify_shuffle_proof_rapidsnark(shuffle_vkey, &bob_proof, &bob_shuffle.public_inputs)
+            .unwrap()
+    );
     let bob_shuffle_time = bob_shuffle_start.elapsed();
-    println!("[TEST] Bob's Shuffle Proof verified. Time: {:.2}s", bob_shuffle_time.as_secs_f64());
+    println!(
+        "[TEST] Bob's Shuffle Proof verified. Time: {:.2}s",
+        bob_shuffle_time.as_secs_f64()
+    );
 
     // 7. Reveal two cards with rapidsnark proofs
     let reveal_start = Instant::now();
@@ -114,29 +132,42 @@ async fn test_rapidsnark_shuffle_and_reveal() {
         // Verify Reveal ZK Proofs (using rapidsnark)
         println!("[TEST] Generating Reveal Proofs for card {card_index} with rapidsnark...");
         let reveal_proof_start = Instant::now();
-        let alice_reveal_proof = generate_reveal_proof_rapidsnark(
-            &alice_reveal.public_inputs,
-            alice_reveal.sk_p,
-        ).unwrap();
-        let bob_reveal_proof = generate_reveal_proof_rapidsnark(
-            &bob_reveal.public_inputs,
-            bob_reveal.sk_p,
-        ).unwrap();
+        let alice_reveal_proof =
+            generate_reveal_proof_rapidsnark(&alice_reveal.public_inputs, alice_reveal.sk_p)
+                .unwrap();
+        let bob_reveal_proof =
+            generate_reveal_proof_rapidsnark(&bob_reveal.public_inputs, bob_reveal.sk_p).unwrap();
 
-        let alice_verify = verify_reveal_proof_rapidsnark(reveal_vkey, &alice_reveal_proof, &alice_reveal.public_inputs).unwrap();
+        let alice_verify = verify_reveal_proof_rapidsnark(
+            reveal_vkey,
+            &alice_reveal_proof,
+            &alice_reveal.public_inputs,
+        )
+        .unwrap();
         if !alice_verify {
             println!("[ERROR] Alice's reveal proof failed verification!");
         }
         assert!(alice_verify, "Alice's reveal proof verification failed");
 
-        let bob_verify = verify_reveal_proof_rapidsnark(reveal_vkey, &bob_reveal_proof, &bob_reveal.public_inputs).unwrap();
+        let bob_verify = verify_reveal_proof_rapidsnark(
+            reveal_vkey,
+            &bob_reveal_proof,
+            &bob_reveal.public_inputs,
+        )
+        .unwrap();
         assert!(bob_verify, "Bob's reveal proof verification failed");
         let reveal_proof_time = reveal_proof_start.elapsed();
-        println!("[TEST] Reveal Proofs for card {card_index} verified. Time: {:.2}s", reveal_proof_time.as_secs_f64());
+        println!(
+            "[TEST] Reveal Proofs for card {card_index} verified. Time: {:.2}s",
+            reveal_proof_time.as_secs_f64()
+        );
 
         // 8. Combine partial decryptions to get the card
-        let combined_reveal = (alice_reveal.partial_decryption.into_group() + bob_reveal.partial_decryption.into_group()).into_affine();
-        let revealed_card = (card_to_reveal.c1.into_group() - combined_reveal.into_group()).into_affine();
+        let combined_reveal = (alice_reveal.partial_decryption.into_group()
+            + bob_reveal.partial_decryption.into_group())
+        .into_affine();
+        let revealed_card =
+            (card_to_reveal.c1.into_group() - combined_reveal.into_group()).into_affine();
 
         // Logical verification with aggregated SK
         let aggregated_sk = alice_keys.sk + bob_keys.sk;
@@ -144,8 +175,14 @@ async fn test_rapidsnark_shuffle_and_reveal() {
 
         // 9. Verify the revealed card is one of the original cards
         let found = cards.contains(&revealed_card);
-        assert_eq!(revealed_card, direct_decrypted, "Reveal process mismatch for card {card_index}!");
-        assert!(found, "Revealed card {card_index} was not in the original deck!");
+        assert_eq!(
+            revealed_card, direct_decrypted,
+            "Reveal process mismatch for card {card_index}!"
+        );
+        assert!(
+            found,
+            "Revealed card {card_index} was not in the original deck!"
+        );
     }
 
     let total_reveal_time = reveal_start.elapsed();
@@ -153,11 +190,26 @@ async fn test_rapidsnark_shuffle_and_reveal() {
 
     println!("\n========== RAPIDSNARK TIMING SUMMARY ==========");
     println!("Setup (keys + encrypt):   {:.2}s", setup_time.as_secs_f64());
-    println!("Alice Shuffle Proof Gen:  {:.2}s", alice_proof_gen_time.as_secs_f64());
-    println!("Alice Shuffle Verify:     {:.2}s", alice_verify_start.elapsed().as_secs_f64());
-    println!("Bob Shuffle (gen+verify): {:.2}s", bob_shuffle_time.as_secs_f64());
-    println!("Reveal 2 cards (total):   {:.2}s", total_reveal_time.as_secs_f64());
+    println!(
+        "Alice Shuffle Proof Gen:  {:.2}s",
+        alice_proof_gen_time.as_secs_f64()
+    );
+    println!(
+        "Alice Shuffle Verify:     {:.2}s",
+        alice_verify_start.elapsed().as_secs_f64()
+    );
+    println!(
+        "Bob Shuffle (gen+verify): {:.2}s",
+        bob_shuffle_time.as_secs_f64()
+    );
+    println!(
+        "Reveal 2 cards (total):   {:.2}s",
+        total_reveal_time.as_secs_f64()
+    );
     println!("-----------------------------------------------");
-    println!("TOTAL TEST TIME:          {:.2}s", total_test_time.as_secs_f64());
+    println!(
+        "TOTAL TEST TIME:          {:.2}s",
+        total_test_time.as_secs_f64()
+    );
     println!("===============================================\n");
 }

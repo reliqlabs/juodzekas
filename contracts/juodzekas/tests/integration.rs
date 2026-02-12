@@ -1,15 +1,25 @@
-use cosmwasm_std::{Addr, AnyMsg, Binary, Coin, Empty, GrpcQuery, Uint128};
 use cosmwasm_std::testing::{MockApi, MockStorage};
-use cw_multi_test::{App, AppBuilder, BankKeeper, ContractWrapper, DistributionKeeper,
-                    Executor, FailingModule, GovFailingModule, IbcFailingModule,
-                    Stargate, StakeKeeper, WasmKeeper};
+use cosmwasm_std::{Addr, AnyMsg, Binary, Coin, Empty, GrpcQuery, Uint128};
+use cw_multi_test::{
+    App, AppBuilder, BankKeeper, ContractWrapper, DistributionKeeper, Executor, FailingModule,
+    GovFailingModule, IbcFailingModule, StakeKeeper, Stargate, WasmKeeper,
+};
 use juodzekas::msg::{ExecuteMsg, InstantiateMsg};
 use juodzekas::state::{DoubleRestriction, PayoutRatio};
 use prost::Message;
 
-type TestApp = App<BankKeeper, MockApi, MockStorage, FailingModule<Empty, Empty, Empty>,
-                    WasmKeeper<Empty, Empty>, StakeKeeper, DistributionKeeper,
-                    IbcFailingModule, GovFailingModule, ZkMockStargate>;
+type TestApp = App<
+    BankKeeper,
+    MockApi,
+    MockStorage,
+    FailingModule<Empty, Empty, Empty>,
+    WasmKeeper<Empty, Empty>,
+    StakeKeeper,
+    DistributionKeeper,
+    IbcFailingModule,
+    GovFailingModule,
+    ZkMockStargate,
+>;
 
 #[derive(Clone, Copy, PartialEq, prost::Message)]
 struct ProofVerifyResponse {
@@ -93,15 +103,15 @@ impl SeededGame {
     }
 
     pub fn dealer_shuffled_deck(&self) -> Vec<Binary> {
-        (0..52).map(|i| {
-            Binary::from(format!("dealer_card_{}_{}", self.seed, i).as_bytes())
-        }).collect()
+        (0..52)
+            .map(|i| Binary::from(format!("dealer_card_{}_{}", self.seed, i).as_bytes()))
+            .collect()
     }
 
     pub fn player_shuffled_deck(&self) -> Vec<Binary> {
-        (0..52).map(|i| {
-            Binary::from(format!("player_card_{}_{}", self.seed, i).as_bytes())
-        }).collect()
+        (0..52)
+            .map(|i| Binary::from(format!("player_card_{}_{}", self.seed, i).as_bytes()))
+            .collect()
     }
 
     pub fn player_partial(&self, card_index: u32) -> Binary {
@@ -146,49 +156,64 @@ fn test_two_party_basic_game() {
     let (mut app, dealer, player, code_id) = setup_app();
 
     // Instantiate contract
-    let contract_addr = app.instantiate_contract(
-        code_id,
-        dealer.clone(),
-        &InstantiateMsg {
-            denom: "utoken".to_string(),
-            min_bet: Uint128::new(100),
-            max_bet: Uint128::new(10000),
-            blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
-            insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
-            standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
-            dealer_hits_soft_17: false,
-            dealer_peeks: false,
-            double_restriction: DoubleRestriction::Any,
-            max_splits: 3,
-            can_split_aces: true,
-            can_hit_split_aces: false,
-            surrender_allowed: true,
-            shuffle_vk_id: "test_shuffle".to_string(),
-            reveal_vk_id: "test_reveal".to_string(),
-            timeout_seconds: None,
-        },
-        &[],
-        "juodzekas",
-        Some(dealer.to_string()),
-    ).unwrap();
+    let contract_addr = app
+        .instantiate_contract(
+            code_id,
+            dealer.clone(),
+            &InstantiateMsg {
+                denom: "utoken".to_string(),
+                min_bet: Uint128::new(100),
+                max_bet: Uint128::new(10000),
+                blackjack_payout: PayoutRatio {
+                    numerator: 3,
+                    denominator: 2,
+                },
+                insurance_payout: PayoutRatio {
+                    numerator: 2,
+                    denominator: 1,
+                },
+                standard_payout: PayoutRatio {
+                    numerator: 1,
+                    denominator: 1,
+                },
+                dealer_hits_soft_17: false,
+                dealer_peeks: false,
+                double_restriction: DoubleRestriction::Any,
+                max_splits: 3,
+                can_split_aces: true,
+                can_hit_split_aces: false,
+                surrender_allowed: true,
+                shuffle_vk_id: "test_shuffle".to_string(),
+                reveal_vk_id: "test_reveal".to_string(),
+                timeout_seconds: None,
+            },
+            &[],
+            "juodzekas",
+            Some(dealer.to_string()),
+        )
+        .unwrap();
 
     let game = SeededGame::new(12345);
 
     // Dealer creates game with initial shuffle
-    let create_response = app.execute_contract(
-        dealer.clone(),
-        contract_addr.clone(),
-        &ExecuteMsg::CreateGame {
-            public_key: Binary::from(b"dealer_pubkey"),
-            shuffled_deck: game.dealer_shuffled_deck(),
-            proof: Binary::from(b"dealer_shuffle_proof"),
-            public_inputs: vec![],
-        },
-        &[Coin::new(100_000u128, "utoken")], // Dealer bankroll
-    ).expect("Dealer should create game");
+    let create_response = app
+        .execute_contract(
+            dealer.clone(),
+            contract_addr.clone(),
+            &ExecuteMsg::CreateGame {
+                public_key: Binary::from(b"dealer_pubkey"),
+                shuffled_deck: game.dealer_shuffled_deck(),
+                proof: Binary::from(b"dealer_shuffle_proof"),
+                public_inputs: vec![],
+            },
+            &[Coin::new(100_000u128, "utoken")], // Dealer bankroll
+        )
+        .expect("Dealer should create game");
 
     // Extract game_id from response
-    let game_id: u64 = create_response.events.iter()
+    let game_id: u64 = create_response
+        .events
+        .iter()
         .find(|e| e.ty == "wasm")
         .and_then(|e| e.attributes.iter().find(|a| a.key == "game_id"))
         .map(|a| a.value.parse().unwrap())
@@ -206,7 +231,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[Coin::new(1000u128, "utoken")], // Player bet
-    ).expect("Player should join game");
+    )
+    .expect("Player should join game");
 
     // Reveal card 0 (player's first card) - both parties submit
     // Player gets 10 of hearts
@@ -221,7 +247,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Player should submit partial reveal 0");
+    )
+    .expect("Player should submit partial reveal 0");
 
     app.execute_contract(
         dealer.clone(),
@@ -234,7 +261,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Dealer should submit partial reveal 0");
+    )
+    .expect("Dealer should submit partial reveal 0");
 
     // Reveal card 1 (player's second card)
     // Player gets 9 of hearts
@@ -249,7 +277,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Player should submit partial reveal 1");
+    )
+    .expect("Player should submit partial reveal 1");
 
     app.execute_contract(
         dealer.clone(),
@@ -262,7 +291,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Dealer should submit partial reveal 1");
+    )
+    .expect("Dealer should submit partial reveal 1");
 
     // Reveal card 2 (dealer's upcard)
     // Dealer shows 7
@@ -277,7 +307,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Player should submit partial reveal 2");
+    )
+    .expect("Player should submit partial reveal 2");
 
     app.execute_contract(
         dealer.clone(),
@@ -290,7 +321,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Dealer should submit partial reveal 2");
+    )
+    .expect("Dealer should submit partial reveal 2");
 
     // Player has 19, dealer shows 7 - player stands
     app.execute_contract(
@@ -298,7 +330,8 @@ fn test_two_party_basic_game() {
         contract_addr.clone(),
         &ExecuteMsg::Stand { game_id },
         &[],
-    ).expect("Player should be able to stand");
+    )
+    .expect("Player should be able to stand");
 
     // Reveal dealer's hole card (card 3)
     // Dealer has 10 underneath for total 17
@@ -313,7 +346,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Player should submit partial reveal 3");
+    )
+    .expect("Player should submit partial reveal 3");
 
     app.execute_contract(
         dealer.clone(),
@@ -326,7 +360,8 @@ fn test_two_party_basic_game() {
             public_inputs: vec![],
         },
         &[],
-    ).expect("Dealer should submit partial reveal 3 - game should settle");
+    )
+    .expect("Dealer should submit partial reveal 3 - game should settle");
 
     // Balance verification disabled: cw-multi-test v3.0.1 doesn't support cosmwasm-std v3.0.2 Uint256 amounts
     // The game settled correctly as verified by the status check above
@@ -336,49 +371,64 @@ fn test_two_party_basic_game() {
 fn test_two_party_player_busts() {
     let (mut app, dealer, player, code_id) = setup_app();
 
-    let contract_addr = app.instantiate_contract(
-        code_id,
-        dealer.clone(),
-        &InstantiateMsg {
-            denom: "utoken".to_string(),
-            min_bet: Uint128::new(100),
-            max_bet: Uint128::new(10000),
-            blackjack_payout: PayoutRatio { numerator: 3, denominator: 2 },
-            insurance_payout: PayoutRatio { numerator: 2, denominator: 1 },
-            standard_payout: PayoutRatio { numerator: 1, denominator: 1 },
-            dealer_hits_soft_17: false,
-            dealer_peeks: false,
-            double_restriction: DoubleRestriction::Any,
-            max_splits: 3,
-            can_split_aces: true,
-            can_hit_split_aces: false,
-            surrender_allowed: true,
-            shuffle_vk_id: "test_shuffle".to_string(),
-            reveal_vk_id: "test_reveal".to_string(),
-            timeout_seconds: None,
-        },
-        &[],
-        "juodzekas",
-        Some(dealer.to_string()),
-    ).unwrap();
+    let contract_addr = app
+        .instantiate_contract(
+            code_id,
+            dealer.clone(),
+            &InstantiateMsg {
+                denom: "utoken".to_string(),
+                min_bet: Uint128::new(100),
+                max_bet: Uint128::new(10000),
+                blackjack_payout: PayoutRatio {
+                    numerator: 3,
+                    denominator: 2,
+                },
+                insurance_payout: PayoutRatio {
+                    numerator: 2,
+                    denominator: 1,
+                },
+                standard_payout: PayoutRatio {
+                    numerator: 1,
+                    denominator: 1,
+                },
+                dealer_hits_soft_17: false,
+                dealer_peeks: false,
+                double_restriction: DoubleRestriction::Any,
+                max_splits: 3,
+                can_split_aces: true,
+                can_hit_split_aces: false,
+                surrender_allowed: true,
+                shuffle_vk_id: "test_shuffle".to_string(),
+                reveal_vk_id: "test_reveal".to_string(),
+                timeout_seconds: None,
+            },
+            &[],
+            "juodzekas",
+            Some(dealer.to_string()),
+        )
+        .unwrap();
 
     let game = SeededGame::new(54321);
 
     // Dealer creates game
-    let create_response = app.execute_contract(
-        dealer.clone(),
-        contract_addr.clone(),
-        &ExecuteMsg::CreateGame {
-            public_key: Binary::from(b"dealer_pubkey"),
-            shuffled_deck: game.dealer_shuffled_deck(),
-            proof: Binary::from(b"dealer_shuffle_proof"),
-            public_inputs: vec![],
-        },
-        &[Coin::new(100_000u128, "utoken")],
-    ).unwrap();
+    let create_response = app
+        .execute_contract(
+            dealer.clone(),
+            contract_addr.clone(),
+            &ExecuteMsg::CreateGame {
+                public_key: Binary::from(b"dealer_pubkey"),
+                shuffled_deck: game.dealer_shuffled_deck(),
+                proof: Binary::from(b"dealer_shuffle_proof"),
+                public_inputs: vec![],
+            },
+            &[Coin::new(100_000u128, "utoken")],
+        )
+        .unwrap();
 
     // Extract game_id
-    let game_id: u64 = create_response.events.iter()
+    let game_id: u64 = create_response
+        .events
+        .iter()
         .find(|e| e.ty == "wasm")
         .and_then(|e| e.attributes.iter().find(|a| a.key == "game_id"))
         .map(|a| a.value.parse().unwrap())
@@ -396,14 +446,15 @@ fn test_two_party_player_busts() {
             public_inputs: vec![],
         },
         &[Coin::new(500u128, "utoken")],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Deal initial cards: player gets 10+6=16, dealer shows 7
     for card_idx in 0..3 {
         let card_val = match card_idx {
-            0 => 9,  // Player: 10
-            1 => 5,  // Player: 6
-            2 => 6,  // Dealer: 7
+            0 => 9, // Player: 10
+            1 => 5, // Player: 6
+            2 => 6, // Dealer: 7
             _ => 0,
         };
 
@@ -412,26 +463,28 @@ fn test_two_party_player_busts() {
             contract_addr.clone(),
             &ExecuteMsg::SubmitReveal {
                 game_id,
-            card_index: card_idx,
+                card_index: card_idx,
                 partial_decryption: game.player_partial(card_idx),
                 proof: Binary::from(format!("player_reveal_{card_idx}").as_bytes()),
                 public_inputs: vec![],
             },
             &[],
-        ).unwrap();
+        )
+        .unwrap();
 
         app.execute_contract(
             dealer.clone(),
             contract_addr.clone(),
             &ExecuteMsg::SubmitReveal {
                 game_id,
-            card_index: card_idx,
+                card_index: card_idx,
                 partial_decryption: game.dealer_partial(card_idx, card_val),
                 proof: Binary::from(format!("dealer_reveal_{card_idx}").as_bytes()),
                 public_inputs: vec![],
             },
             &[],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // Player hits (16 is risky)
@@ -440,7 +493,8 @@ fn test_two_party_player_busts() {
         contract_addr.clone(),
         &ExecuteMsg::Hit { game_id },
         &[],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Reveal next card (index 4) - player gets 10, busts with 26
     app.execute_contract(
@@ -454,7 +508,8 @@ fn test_two_party_player_busts() {
             public_inputs: vec![],
         },
         &[],
-    ).unwrap();
+    )
+    .unwrap();
 
     app.execute_contract(
         dealer.clone(),
@@ -467,7 +522,8 @@ fn test_two_party_player_busts() {
             public_inputs: vec![],
         },
         &[],
-    ).unwrap();
+    )
+    .unwrap();
 
     // All hands busted → game settles immediately, no dealer hole card reveal needed.
     // Balance verification disabled: cw-multi-test v3.0.1 doesn't support cosmwasm-std v3.0.2 Uint256 amounts

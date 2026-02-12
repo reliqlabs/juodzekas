@@ -1,14 +1,12 @@
-use zk_shuffle::elgamal::{KeyPair, Ciphertext, encrypt};
-use zk_shuffle::shuffle::shuffle;
-use zk_shuffle::decrypt::reveal_card;
-use zk_shuffle::babyjubjub::{Point, Fr};
-use zk_shuffle::proof::{
-    generate_shuffle_proof_rapidsnark, verify_shuffle_proof_rapidsnark,
-};
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_std::UniformRand;
-use ark_ec::{CurveGroup, AffineRepr};
-use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use zk_shuffle::babyjubjub::{Fr, Point};
+use zk_shuffle::decrypt::reveal_card;
+use zk_shuffle::elgamal::{encrypt, Ciphertext, KeyPair};
+use zk_shuffle::proof::{generate_shuffle_proof_rapidsnark, verify_shuffle_proof_rapidsnark};
+use zk_shuffle::shuffle::shuffle;
 
 // Re-export from blackjack package
 pub use blackjack::{Card, GameRules};
@@ -32,13 +30,13 @@ pub struct GameState {
     pub deck_position: usize,
     pub rng: ChaCha8Rng,
     pub mode: GameMode,
-    pub rules: GameRules, // Game rules configuration
-    pub active_spot: usize, // Current spot being played (0-indexed)
-    pub active_hand_in_spot: usize, // When spot is split, which hand within spot (0-indexed)
-    pub hands_doubled: Vec<Vec<bool>>, // Track which hands have doubled [spot][hand_in_spot]
-    pub hands_stood: Vec<Vec<bool>>, // Track which hands have stood [spot][hand_in_spot]
+    pub rules: GameRules,                  // Game rules configuration
+    pub active_spot: usize,                // Current spot being played (0-indexed)
+    pub active_hand_in_spot: usize,        // When spot is split, which hand within spot (0-indexed)
+    pub hands_doubled: Vec<Vec<bool>>,     // Track which hands have doubled [spot][hand_in_spot]
+    pub hands_stood: Vec<Vec<bool>>,       // Track which hands have stood [spot][hand_in_spot]
     pub hands_surrendered: Vec<Vec<bool>>, // Track which hands have surrendered [spot][hand_in_spot]
-    pub dealer_peeked: bool, // Whether dealer has peeked for blackjack
+    pub dealer_peeked: bool,               // Whether dealer has peeked for blackjack
 }
 
 impl GameState {
@@ -55,8 +53,10 @@ impl GameState {
         Self::new_with_spots(mode, 1)
     }
 
-    fn new_with_spots(mode: GameMode, num_spots: usize) -> Result<Self, Box<dyn std::error::Error>> {
-
+    fn new_with_spots(
+        mode: GameMode,
+        num_spots: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut rng = ChaCha8Rng::from_entropy();
 
         // Generate keypairs for player and dealer
@@ -64,7 +64,8 @@ impl GameState {
         let dealer_keys = KeyPair::generate(&mut rng);
 
         // Aggregate public key
-        let aggregated_pk = (player_keys.pk.into_group() + dealer_keys.pk.into_group()).into_affine();
+        let aggregated_pk =
+            (player_keys.pk.into_group() + dealer_keys.pk.into_group()).into_affine();
 
         // Create card mapping (52 cards)
         let g = Point::generator();
@@ -107,10 +108,14 @@ impl GameState {
 
     pub fn initialize_deck(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Encrypt all cards with the aggregated public key
-        let encrypted_deck: Vec<Ciphertext> = self.card_mapping.iter().map(|card_point| {
-            let r = Fr::rand(&mut self.rng);
-            encrypt(&self.aggregated_pk, card_point, &r)
-        }).collect();
+        let encrypted_deck: Vec<Ciphertext> = self
+            .card_mapping
+            .iter()
+            .map(|card_point| {
+                let r = Fr::rand(&mut self.rng);
+                encrypt(&self.aggregated_pk, card_point, &r)
+            })
+            .collect();
 
         self.encrypted_deck = encrypted_deck;
         self.deck_position = 0;
@@ -146,22 +151,38 @@ impl GameState {
         // Player shuffles with proof
         let shuffle_start = std::time::Instant::now();
         let player_shuffle = shuffle(&mut self.rng, &self.encrypted_deck, &self.aggregated_pk);
-        log::info!("Player shuffle (crypto only) took {}s", shuffle_start.elapsed().as_secs());
+        log::info!(
+            "Player shuffle (crypto only) took {}s",
+            shuffle_start.elapsed().as_secs()
+        );
 
         let proof_gen_start = std::time::Instant::now();
         let player_proof = generate_shuffle_proof_rapidsnark(
             &player_shuffle.public_inputs,
             player_shuffle.private_inputs,
         )?;
-        log::info!("Player proof generation took {}s", proof_gen_start.elapsed().as_secs());
+        log::info!(
+            "Player proof generation took {}s",
+            proof_gen_start.elapsed().as_secs()
+        );
 
         // Verify player's shuffle proof
         let verify_start = std::time::Instant::now();
-        if !verify_shuffle_proof_rapidsnark(shuffle_vkey_path, &player_proof, &player_shuffle.public_inputs)? {
+        if !verify_shuffle_proof_rapidsnark(
+            shuffle_vkey_path,
+            &player_proof,
+            &player_shuffle.public_inputs,
+        )? {
             return Err("Player shuffle proof verification failed".into());
         }
-        log::info!("Player proof verification took {}s", verify_start.elapsed().as_secs());
-        log::info!("Player shuffle proof completed in {}s", player_start.elapsed().as_secs());
+        log::info!(
+            "Player proof verification took {}s",
+            verify_start.elapsed().as_secs()
+        );
+        log::info!(
+            "Player shuffle proof completed in {}s",
+            player_start.elapsed().as_secs()
+        );
 
         self.encrypted_deck = player_shuffle.deck;
 
@@ -171,29 +192,49 @@ impl GameState {
         // Dealer shuffles with proof
         let shuffle_start = std::time::Instant::now();
         let dealer_shuffle = shuffle(&mut self.rng, &self.encrypted_deck, &self.aggregated_pk);
-        log::info!("Dealer shuffle (crypto only) took {}s", shuffle_start.elapsed().as_secs());
+        log::info!(
+            "Dealer shuffle (crypto only) took {}s",
+            shuffle_start.elapsed().as_secs()
+        );
 
         let proof_gen_start = std::time::Instant::now();
         let dealer_proof = generate_shuffle_proof_rapidsnark(
             &dealer_shuffle.public_inputs,
             dealer_shuffle.private_inputs,
         )?;
-        log::info!("Dealer proof generation took {}s", proof_gen_start.elapsed().as_secs());
+        log::info!(
+            "Dealer proof generation took {}s",
+            proof_gen_start.elapsed().as_secs()
+        );
 
         // Verify dealer's shuffle proof
         let verify_start = std::time::Instant::now();
-        if !verify_shuffle_proof_rapidsnark(shuffle_vkey_path, &dealer_proof, &dealer_shuffle.public_inputs)? {
+        if !verify_shuffle_proof_rapidsnark(
+            shuffle_vkey_path,
+            &dealer_proof,
+            &dealer_shuffle.public_inputs,
+        )? {
             return Err("Dealer shuffle proof verification failed".into());
         }
-        log::info!("Dealer proof verification took {}s", verify_start.elapsed().as_secs());
-        log::info!("Dealer shuffle proof completed in {}s", dealer_start.elapsed().as_secs());
+        log::info!(
+            "Dealer proof verification took {}s",
+            verify_start.elapsed().as_secs()
+        );
+        log::info!(
+            "Dealer shuffle proof completed in {}s",
+            dealer_start.elapsed().as_secs()
+        );
 
         self.encrypted_deck = dealer_shuffle.deck;
 
         Ok(())
     }
 
-    pub fn draw_card(&mut self, for_dealer: bool, spot_index: Option<usize>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn draw_card(
+        &mut self,
+        for_dealer: bool,
+        spot_index: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.deck_position >= self.encrypted_deck.len() {
             return Err("No more cards in deck".into());
         }
@@ -206,12 +247,16 @@ impl GameState {
         let dealer_reveal = reveal_card(&self.dealer_keys.sk, card_to_reveal, &self.dealer_keys.pk);
 
         // Combine partial decryptions
-        let combined_reveal = (player_reveal.partial_decryption.into_group() +
-                             dealer_reveal.partial_decryption.into_group()).into_affine();
-        let revealed_card_point = (card_to_reveal.c1.into_group() - combined_reveal.into_group()).into_affine();
+        let combined_reveal = (player_reveal.partial_decryption.into_group()
+            + dealer_reveal.partial_decryption.into_group())
+        .into_affine();
+        let revealed_card_point =
+            (card_to_reveal.c1.into_group() - combined_reveal.into_group()).into_affine();
 
         // Find which card it is
-        let card_index = self.card_mapping.iter()
+        let card_index = self
+            .card_mapping
+            .iter()
             .position(|&point| point == revealed_card_point)
             .ok_or("Card not found in mapping")?;
 
@@ -310,7 +355,6 @@ impl GameState {
         Ok(())
     }
 
-
     // These methods now delegate to game_logic.rs which uses blackjack package
     // Kept here for backwards compatibility with existing TUI code
 
@@ -349,7 +393,9 @@ impl GameState {
             // Surrender on hard 16 vs dealer 9, 10, A
             // Surrender on hard 15 vs dealer 10
             if !is_soft {
-                if player_value == 16 && (dealer_up_card == 9 || dealer_up_card == 10 || dealer_up_card == 11) {
+                if player_value == 16
+                    && (dealer_up_card == 9 || dealer_up_card == 10 || dealer_up_card == 11)
+                {
                     return "Surrender";
                 }
                 if player_value == 15 && dealer_up_card == 10 {
@@ -371,7 +417,13 @@ impl GameState {
                 return "Split";
             }
             // Never split 10s, 5s, 4s
-            if card_rank == 10 || card_rank == 11 || card_rank == 12 || card_rank == 13 || card_rank == 5 || card_rank == 4 {
+            if card_rank == 10
+                || card_rank == 11
+                || card_rank == 12
+                || card_rank == 13
+                || card_rank == 5
+                || card_rank == 4
+            {
                 // Fall through to regular strategy
             } else if card_rank == 9 {
                 // Split 9s except against 7, 10, or Ace

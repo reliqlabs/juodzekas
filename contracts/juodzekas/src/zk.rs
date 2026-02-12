@@ -1,7 +1,7 @@
 use cosmwasm_std::{Binary, Deps, StdResult};
 use prost::Message;
-use xion_types::xion::zk::v1::{QueryVerifyRequest, ProofVerifyResponse};
 use xion_types::traits::MessageExt;
+use xion_types::xion::zk::v1::{ProofVerifyResponse, QueryVerifyRequest};
 
 pub fn xion_zk_verify(
     deps: Deps,
@@ -18,7 +18,7 @@ pub fn xion_zk_verify(
 
     let query_response = deps.querier.query_grpc(
         String::from("/xion.zk.v1.Query/ProofVerify"),
-        Binary::new(query_request.to_bytes()?)
+        Binary::new(query_request.to_bytes()?),
     )?;
     let verify_response = ProofVerifyResponse::decode(query_response.as_slice())?;
 

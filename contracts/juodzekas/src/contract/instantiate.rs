@@ -1,8 +1,8 @@
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError};
-use cw2::set_contract_version;
 use crate::error::ContractError;
 use crate::msg::InstantiateMsg;
 use crate::state::{Config, CONFIG, DEALER, DEALER_BALANCE, GAME_COUNTER};
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError};
+use cw2::set_contract_version;
 
 const CONTRACT_NAME: &str = "crates.io:juodzekas";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -16,7 +16,8 @@ pub fn instantiate(
     // Reject extra denoms that would get stuck
     if info.funds.iter().any(|c| c.denom != msg.denom) {
         return Err(ContractError::Std(StdError::msg(format!(
-            "Only {} accepted; other denoms would be permanently locked", msg.denom
+            "Only {} accepted; other denoms would be permanently locked",
+            msg.denom
         ))));
     }
 
@@ -25,28 +26,36 @@ pub fn instantiate(
         || msg.standard_payout.denominator == 0
         || msg.insurance_payout.denominator == 0
     {
-        return Err(ContractError::Std(StdError::msg("Payout ratio denominator cannot be zero")));
+        return Err(ContractError::Std(StdError::msg(
+            "Payout ratio denominator cannot be zero",
+        )));
     }
 
     // Validate bet limits
     if msg.min_bet.is_zero() {
-        return Err(ContractError::Std(StdError::msg("min_bet must be greater than zero")));
+        return Err(ContractError::Std(StdError::msg(
+            "min_bet must be greater than zero",
+        )));
     }
     if msg.min_bet > msg.max_bet {
-        return Err(ContractError::Std(StdError::msg("min_bet cannot exceed max_bet")));
+        return Err(ContractError::Std(StdError::msg(
+            "min_bet cannot exceed max_bet",
+        )));
     }
 
     // With bankroll = 10 * max_bet, dealer timeout pays player 2*total_bets.
     // Max total_bets = (max_splits+1) * max_bet. Solvency requires max_splits <= 4.
     if msg.max_splits > 4 {
         return Err(ContractError::Std(StdError::msg(
-            "max_splits cannot exceed 4 (bankroll insolvency risk on dealer timeout)"
+            "max_splits cannot exceed 4 (bankroll insolvency risk on dealer timeout)",
         )));
     }
 
     let timeout = msg.timeout_seconds.unwrap_or(3600);
     if timeout == 0 {
-        return Err(ContractError::Std(StdError::msg("timeout_seconds must be greater than zero")));
+        return Err(ContractError::Std(StdError::msg(
+            "timeout_seconds must be greater than zero",
+        )));
     }
 
     let config = Config {
@@ -75,7 +84,9 @@ pub fn instantiate(
     DEALER.save(deps.storage, &info.sender)?;
 
     // Extract initial bankroll from sent funds
-    let initial_balance = info.funds.iter()
+    let initial_balance = info
+        .funds
+        .iter()
         .find(|c| c.denom == msg.denom)
         .map(|c| cosmwasm_std::Uint128::try_from(c.amount).unwrap_or(cosmwasm_std::Uint128::MAX))
         .unwrap_or(cosmwasm_std::Uint128::zero());

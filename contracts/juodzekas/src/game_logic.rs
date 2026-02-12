@@ -1,5 +1,8 @@
-use blackjack::{Card, GameRules, GameState, Hand as BjHand, PayoutRatio, Spot, TurnOwner as BjTurnOwner, GamePhase};
-use crate::state::{GameSession, HandStatus, GameStatus, TurnOwner, Config};
+use crate::state::{Config, GameSession, GameStatus, HandStatus, TurnOwner};
+use blackjack::{
+    Card, GamePhase, GameRules, GameState, Hand as BjHand, PayoutRatio, Spot,
+    TurnOwner as BjTurnOwner,
+};
 
 /// Convert contract GameSession to blackjack GameState for rule validation
 pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState {
@@ -31,14 +34,18 @@ pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState 
     spots.push(spot);
 
     // Convert dealer hand
-    let dealer_cards: Vec<Card> = session.dealer_hand.iter()
+    let dealer_cards: Vec<Card> = session
+        .dealer_hand
+        .iter()
         .map(|&v| card_value_to_card(v))
         .collect();
 
     // Determine phase
     let phase = match &session.status {
         GameStatus::WaitingForPlayerJoin => GamePhase::NotStarted,
-        GameStatus::WaitingForReveal { .. } if session.dealer_hand.is_empty() => GamePhase::InitialDeal,
+        GameStatus::WaitingForReveal { .. } if session.dealer_hand.is_empty() => {
+            GamePhase::InitialDeal
+        }
         GameStatus::WaitingForReveal { .. } => GamePhase::DealerTurn, // Card reveals during game
         GameStatus::OfferingInsurance => GamePhase::PlayerTurn, // Insurance is a player decision
         GameStatus::PlayerTurn => GamePhase::PlayerTurn,
@@ -70,8 +77,9 @@ pub fn config_to_rules(config: &Config) -> GameRules {
     // Convert contract PayoutRatio to blackjack PayoutRatio
     let blackjack_payout = PayoutRatio::new(
         config.blackjack_payout.numerator,
-        config.blackjack_payout.denominator
-    ).unwrap_or(PayoutRatio::THREE_TO_TWO);
+        config.blackjack_payout.denominator,
+    )
+    .unwrap_or(PayoutRatio::THREE_TO_TWO);
 
     // Convert contract DoubleRestriction to blackjack DoubleRestriction
     let double_restriction = match config.double_restriction {
@@ -83,7 +91,7 @@ pub fn config_to_rules(config: &Config) -> GameRules {
     GameRules {
         dealer_hits_soft_17: config.dealer_hits_soft_17,
         allow_surrender: config.surrender_allowed,
-        late_surrender: true, // Assume late surrender if surrender allowed
+        late_surrender: true,     // Assume late surrender if surrender allowed
         double_after_split: true, // Would need to add to Config if different
         double_restriction,
         allow_resplit: config.max_splits > 0,
@@ -98,8 +106,8 @@ pub fn config_to_rules(config: &Config) -> GameRules {
 /// Convert u8 card value (0-51) to Card enum
 /// Contract uses 0-51 indexing where rank = (value % 13) and suit = (value / 13)
 fn card_value_to_card(value: u8) -> Card {
-    let rank = value % 13;  // 0-12 (Ace through King)
-    let suit = value / 13;  // 0-3 (Spades, Hearts, Diamonds, Clubs)
+    let rank = value % 13; // 0-12 (Ace through King)
+    let suit = value / 13; // 0-3 (Spades, Hearts, Diamonds, Clubs)
 
     match (suit, rank) {
         (0, 0) => Card::AceSpades,
@@ -166,12 +174,12 @@ mod tests {
     #[test]
     fn test_card_value_conversion() {
         // Contract uses 0-51 indexing
-        assert_eq!(card_value_to_card(0), Card::AceSpades);   // rank 0, suit 0
-        assert_eq!(card_value_to_card(3), Card::FourSpades);  // rank 3, suit 0
+        assert_eq!(card_value_to_card(0), Card::AceSpades); // rank 0, suit 0
+        assert_eq!(card_value_to_card(3), Card::FourSpades); // rank 3, suit 0
         assert_eq!(card_value_to_card(12), Card::KingSpades); // rank 12, suit 0
-        assert_eq!(card_value_to_card(13), Card::AceHearts);  // rank 0, suit 1
+        assert_eq!(card_value_to_card(13), Card::AceHearts); // rank 0, suit 1
         assert_eq!(card_value_to_card(25), Card::KingHearts); // rank 12, suit 1
-        assert_eq!(card_value_to_card(51), Card::KingClubs);  // rank 12, suit 3
+        assert_eq!(card_value_to_card(51), Card::KingClubs); // rank 12, suit 3
     }
 
     #[test]
@@ -180,9 +188,18 @@ mod tests {
             denom: "utoken".to_string(),
             min_bet: Uint128::new(100),
             max_bet: Uint128::new(1000),
-            blackjack_payout: crate::state::PayoutRatio { numerator: 3, denominator: 2 },
-            insurance_payout: crate::state::PayoutRatio { numerator: 2, denominator: 1 },
-            standard_payout: crate::state::PayoutRatio { numerator: 1, denominator: 1 },
+            blackjack_payout: crate::state::PayoutRatio {
+                numerator: 3,
+                denominator: 2,
+            },
+            insurance_payout: crate::state::PayoutRatio {
+                numerator: 2,
+                denominator: 1,
+            },
+            standard_payout: crate::state::PayoutRatio {
+                numerator: 1,
+                denominator: 1,
+            },
             dealer_hits_soft_17: false,
             dealer_peeks: true,
             double_restriction: crate::state::DoubleRestriction::Any,

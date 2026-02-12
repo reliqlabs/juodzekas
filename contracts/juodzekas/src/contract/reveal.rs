@@ -1,7 +1,11 @@
-use cosmwasm_std::{BankMsg, Binary, Coin, DepsMut, Env, MessageInfo, Response, StdError, Storage, Uint128};
 use crate::error::ContractError;
-use crate::state::{GameSession, GameStatus, HandStatus, PendingReveal, CONFIG, DEALER_BALANCE, GAMES};
+use crate::state::{
+    GameSession, GameStatus, HandStatus, PendingReveal, CONFIG, DEALER_BALANCE, GAMES,
+};
 use crate::zk::xion_zk_verify;
+use cosmwasm_std::{
+    BankMsg, Binary, Coin, DepsMut, Env, MessageInfo, Response, StdError, Storage, Uint128,
+};
 
 /// Handle submission of partial decryption from player or dealer
 /// Both parties must submit before card is revealed
@@ -29,7 +33,9 @@ pub fn execute_submit_reveal(
     let is_dealer = info.sender == game.dealer;
 
     if !is_player && !is_dealer {
-        return Err(ContractError::Std(StdError::msg("Sender is not part of this game")));
+        return Err(ContractError::Std(StdError::msg(
+            "Sender is not part of this game",
+        )));
     }
 
     // Verify we're in WaitingForReveal status
@@ -77,24 +83,31 @@ pub fn execute_submit_reveal(
 
     // Validate partial_decryption is non-empty (indexing empty slice panics)
     if partial_decryption.is_empty() {
-        return Err(ContractError::Std(StdError::msg("Partial decryption cannot be empty")));
+        return Err(ContractError::Std(StdError::msg(
+            "Partial decryption cannot be empty",
+        )));
     }
 
     // Store the partial decryption
     if is_player {
         if pending_reveal.player_partial.is_some() {
-            return Err(ContractError::Std(StdError::msg("Player already revealed this card")));
+            return Err(ContractError::Std(StdError::msg(
+                "Player already revealed this card",
+            )));
         }
         pending_reveal.player_partial = Some(partial_decryption.clone());
     } else {
         if pending_reveal.dealer_partial.is_some() {
-            return Err(ContractError::Std(StdError::msg("Dealer already revealed this card")));
+            return Err(ContractError::Std(StdError::msg(
+                "Dealer already revealed this card",
+            )));
         }
         pending_reveal.dealer_partial = Some(partial_decryption.clone());
     }
 
     // Check if both parties have submitted
-    let both_revealed = pending_reveal.player_partial.is_some() && pending_reveal.dealer_partial.is_some();
+    let both_revealed =
+        pending_reveal.player_partial.is_some() && pending_reveal.dealer_partial.is_some();
 
     if both_revealed {
         // Combine partial decryptions to reveal the card
@@ -161,7 +174,12 @@ pub fn execute_submit_reveal(
 }
 
 /// Add revealed card to the appropriate hand
-fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8, for_dealer: bool) -> Result<(), ContractError> {
+fn add_card_to_game(
+    game: &mut GameSession,
+    card_index: u32,
+    card_value: u8,
+    for_dealer: bool,
+) -> Result<(), ContractError> {
     // Initial deal: cards 0-1 go to player, cards 2-3 go to dealer
     if card_index < 2 {
         if game.hands.is_empty() {
@@ -181,9 +199,11 @@ fn add_card_to_game(game: &mut GameSession, card_index: u32, card_value: u8, for
             && hand_idx < game.hands.len()
             && game.hands[hand_idx].cards.len() >= 2
         {
-            if let Some(idx) = game.hands.iter().position(|h| {
-                h.cards.len() < 2 && matches!(h.status, HandStatus::Active)
-            }) {
+            if let Some(idx) = game
+                .hands
+                .iter()
+                .position(|h| h.cards.len() < 2 && matches!(h.status, HandStatus::Active))
+            {
                 hand_idx = idx;
             }
         }
@@ -274,7 +294,10 @@ pub(crate) fn advance_or_dealer_turn(
         Ok(GameStatus::PlayerTurn)
     } else {
         // All hands played
-        let all_busted = game.hands.iter().all(|h| matches!(h.status, HandStatus::Busted));
+        let all_busted = game
+            .hands
+            .iter()
+            .all(|h| matches!(h.status, HandStatus::Busted));
         if all_busted {
             settle_game(game, 0)
         } else if game.dealer_peeked {
@@ -362,9 +385,17 @@ fn settle_game(game: &mut GameSession, d_score: u8) -> Result<GameStatus, Contra
                 let player_natural = !is_split_game && p_score == 21 && hand.cards.len() == 2;
                 let dealer_natural = d_score == 21 && game.dealer_hand.len() == 2;
                 let r = if d_score > 21 {
-                    if player_natural { "Player (Blackjack)" } else { "Player" }
+                    if player_natural {
+                        "Player (Blackjack)"
+                    } else {
+                        "Player"
+                    }
                 } else if p_score > d_score {
-                    if player_natural { "Player (Blackjack)" } else { "Player" }
+                    if player_natural {
+                        "Player (Blackjack)"
+                    } else {
+                        "Player"
+                    }
                 } else if p_score < d_score {
                     "Dealer"
                 } else {
@@ -380,7 +411,9 @@ fn settle_game(game: &mut GameSession, d_score: u8) -> Result<GameStatus, Contra
                 r.to_string()
             }
         };
-        hand.status = HandStatus::Settled { winner: result.clone() };
+        hand.status = HandStatus::Settled {
+            winner: result.clone(),
+        };
         results.push(result);
     }
 
@@ -411,16 +444,19 @@ pub(crate) fn execute_payouts(
         match winner {
             "Player (Blackjack)" => {
                 let payout = config.blackjack_payout.calculate_payout(hand.bet);
-                player_winnings = player_winnings.checked_add(hand.bet + payout)
+                player_winnings = player_winnings
+                    .checked_add(hand.bet + payout)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
             "Player" => {
                 let payout = config.standard_payout.calculate_payout(hand.bet);
-                player_winnings = player_winnings.checked_add(hand.bet + payout)
+                player_winnings = player_winnings
+                    .checked_add(hand.bet + payout)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
             "Push" => {
-                player_winnings = player_winnings.checked_add(hand.bet)
+                player_winnings = player_winnings
+                    .checked_add(hand.bet)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
             "Dealer" => {
@@ -437,19 +473,25 @@ pub(crate) fn execute_payouts(
         if dealer_bj {
             // Insurance pays out: return insurance bet + payout
             let ins_payout = config.insurance_payout.calculate_payout(insurance_bet);
-            player_winnings = player_winnings.checked_add(insurance_bet + ins_payout)
+            player_winnings = player_winnings
+                .checked_add(insurance_bet + ins_payout)
                 .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
         }
         // If no dealer BJ, insurance is lost — stays in the pool for dealer
     }
 
     // Credit dealer: bankroll + total player bets + insurance - player winnings
-    let dealer_credit = game.bankroll
-        .checked_add(total_player_bets).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
-        .checked_add(insurance_bet).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
-        .checked_sub(player_winnings).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+    let dealer_credit = game
+        .bankroll
+        .checked_add(total_player_bets)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_add(insurance_bet)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_sub(player_winnings)
+        .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     let mut dealer_balance = DEALER_BALANCE.load(storage)?;
-    dealer_balance = dealer_balance.checked_add(dealer_credit)
+    dealer_balance = dealer_balance
+        .checked_add(dealer_credit)
         .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     DEALER_BALANCE.save(storage, &dealer_balance)?;
 

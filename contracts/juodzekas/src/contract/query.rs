@@ -1,12 +1,19 @@
-use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdResult};
-use crate::msg::{DealerBalanceResponse, DealerResponse, GameListItem, GameResponse, PendingRevealResponse, QueryMsg};
+use crate::msg::{
+    DealerBalanceResponse, DealerResponse, GameListItem, GameResponse, PendingRevealResponse,
+    QueryMsg,
+};
 use crate::state::{Config, CONFIG, DEALER, DEALER_BALANCE, GAMES};
+use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdResult};
 
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_json_binary(&query_config(deps)?),
         QueryMsg::GetGame { game_id } => to_json_binary(&query_game(deps, game_id)?),
-        QueryMsg::ListGames { status_filter, limit, start_after } => to_json_binary(&query_list_games(deps, status_filter, limit, start_after)?),
+        QueryMsg::ListGames {
+            status_filter,
+            limit,
+            start_after,
+        } => to_json_binary(&query_list_games(deps, status_filter, limit, start_after)?),
         QueryMsg::GetDealerBalance {} => to_json_binary(&query_dealer_balance(deps)?),
         QueryMsg::GetDealer {} => to_json_binary(&query_dealer(deps)?),
     }
@@ -55,31 +62,34 @@ fn query_game(deps: Deps, game_id: u64) -> StdResult<GameResponse> {
     })
 }
 
-fn query_list_games(deps: Deps, status_filter: Option<String>, limit: Option<u32>, start_after: Option<u64>) -> StdResult<Vec<GameListItem>> {
+fn query_list_games(
+    deps: Deps,
+    status_filter: Option<String>,
+    limit: Option<u32>,
+    start_after: Option<u64>,
+) -> StdResult<Vec<GameListItem>> {
     let max_limit = limit.unwrap_or(30).min(100) as usize;
-    let start = start_after.map(|id| cw_storage_plus::Bound::exclusive(id));
+    let start = start_after.map(cw_storage_plus::Bound::exclusive);
 
     let games: Result<Vec<GameListItem>, _> = GAMES
         .range(deps.storage, start, None, Order::Ascending)
-        .filter_map(|item| {
-            match item {
-                Ok((game_id, game)) => {
-                    let status_str = format!("{:?}", game.status);
-                    if let Some(ref filter) = status_filter {
-                        if !status_str.contains(filter) {
-                            return None;
-                        }
+        .filter_map(|item| match item {
+            Ok((game_id, game)) => {
+                let status_str = format!("{:?}", game.status);
+                if let Some(ref filter) = status_filter {
+                    if !status_str.contains(filter) {
+                        return None;
                     }
-                    Some(Ok(GameListItem {
-                        game_id,
-                        dealer: game.dealer.to_string(),
-                        player: game.player.to_string(),
-                        status: status_str,
-                        bet: game.bet,
-                    }))
                 }
-                Err(e) => Some(Err(e)),
+                Some(Ok(GameListItem {
+                    game_id,
+                    dealer: game.dealer.to_string(),
+                    player: game.player.to_string(),
+                    status: status_str,
+                    bet: game.bet,
+                }))
             }
+            Err(e) => Some(Err(e)),
         })
         .take(max_limit)
         .collect();
@@ -94,5 +104,7 @@ fn query_dealer_balance(deps: Deps) -> StdResult<DealerBalanceResponse> {
 
 fn query_dealer(deps: Deps) -> StdResult<DealerResponse> {
     let dealer = DEALER.load(deps.storage)?;
-    Ok(DealerResponse { dealer: dealer.to_string() })
+    Ok(DealerResponse {
+        dealer: dealer.to_string(),
+    })
 }

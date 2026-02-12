@@ -32,9 +32,9 @@ pub struct Config {
     pub denom: String,
     pub min_bet: Uint128,
     pub max_bet: Uint128,
-    pub blackjack_payout: PayoutRatio,     // e.g., 3:2 or 6:5
-    pub insurance_payout: PayoutRatio,     // e.g., 2:1
-    pub standard_payout: PayoutRatio,      // e.g., 1:1
+    pub blackjack_payout: PayoutRatio, // e.g., 3:2 or 6:5
+    pub insurance_payout: PayoutRatio, // e.g., 2:1
+    pub standard_payout: PayoutRatio,  // e.g., 1:1
     pub dealer_hits_soft_17: bool,
     pub dealer_peeks: bool,
     pub double_restriction: DoubleRestriction,
@@ -77,7 +77,7 @@ pub struct GameSession {
     pub bankroll: Uint128,
     pub player_pubkey: Binary,
     pub dealer_pubkey: Binary,
-    pub deck: Vec<Binary>, // Encrypted cards
+    pub deck: Vec<Binary>,                         // Encrypted cards
     pub player_shuffled_deck: Option<Vec<Binary>>, // Player's shuffle before dealer re-shuffles
     pub hands: Vec<Hand>,
     pub current_hand_index: u32,
