@@ -13,6 +13,13 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    // Reject extra denoms that would get stuck
+    if info.funds.iter().any(|c| c.denom != msg.denom) {
+        return Err(ContractError::Std(StdError::msg(format!(
+            "Only {} accepted; other denoms would be permanently locked", msg.denom
+        ))));
+    }
+
     // Validate payout ratios
     if msg.blackjack_payout.denominator == 0
         || msg.standard_payout.denominator == 0
@@ -27,6 +34,19 @@ pub fn instantiate(
     }
     if msg.min_bet > msg.max_bet {
         return Err(ContractError::Std(StdError::msg("min_bet cannot exceed max_bet")));
+    }
+
+    // With bankroll = 10 * max_bet, dealer timeout pays player 2*total_bets.
+    // Max total_bets = (max_splits+1) * max_bet. Solvency requires max_splits <= 4.
+    if msg.max_splits > 4 {
+        return Err(ContractError::Std(StdError::msg(
+            "max_splits cannot exceed 4 (bankroll insolvency risk on dealer timeout)"
+        )));
+    }
+
+    let timeout = msg.timeout_seconds.unwrap_or(3600);
+    if timeout == 0 {
+        return Err(ContractError::Std(StdError::msg("timeout_seconds must be greater than zero")));
     }
 
     let config = Config {
@@ -45,7 +65,7 @@ pub fn instantiate(
         surrender_allowed: msg.surrender_allowed,
         shuffle_vk_id: msg.shuffle_vk_id.clone(),
         reveal_vk_id: msg.reveal_vk_id.clone(),
-        timeout_seconds: msg.timeout_seconds.unwrap_or(3600),
+        timeout_seconds: timeout,
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG.save(deps.storage, &config)?;

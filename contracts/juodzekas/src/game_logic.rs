@@ -37,10 +37,10 @@ pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState 
 
     // Determine phase
     let phase = match &session.status {
-        GameStatus::WaitingForPlayerJoin | GameStatus::WaitingForDealerJoin => GamePhase::NotStarted,
-        GameStatus::WaitingForPlayerShuffle | GameStatus::WaitingForDealerShuffle => GamePhase::NotStarted,
+        GameStatus::WaitingForPlayerJoin => GamePhase::NotStarted,
         GameStatus::WaitingForReveal { .. } if session.dealer_hand.is_empty() => GamePhase::InitialDeal,
         GameStatus::WaitingForReveal { .. } => GamePhase::DealerTurn, // Card reveals during game
+        GameStatus::OfferingInsurance => GamePhase::PlayerTurn, // Insurance is a player decision
         GameStatus::PlayerTurn => GamePhase::PlayerTurn,
         GameStatus::DealerTurn => GamePhase::DealerTurn,
         GameStatus::Settled { .. } => GamePhase::Settled,
@@ -59,7 +59,7 @@ pub fn to_blackjack_state(session: &GameSession, rules: GameRules) -> GameState 
         active_spot_index: 0,
         phase,
         current_turn,
-        dealer_peeked: false, // Would need to track this in contract if needed
+        dealer_peeked: session.dealer_peeked,
         rules,
         last_action_timestamp: Some(session.last_action_timestamp),
     }
@@ -226,6 +226,8 @@ mod tests {
             last_action_timestamp: 1000,
             last_card_index: 2,
             pending_reveals: vec![],
+            dealer_peeked: false,
+            insurance_bet: None,
         };
 
         let rules = GameRules::default();

@@ -3,5 +3,14 @@ name = "blackjack"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+edge = []
+edge-cli = ["edge", "dep:clap"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[[bin]]
+name = "edge-calc"
+required-features = ["edge-cli"]

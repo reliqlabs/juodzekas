@@ -16,6 +16,9 @@ pub fn execute_submit_reveal(
     proof: Binary,
     public_inputs: Vec<String>,
 ) -> Result<Response, ContractError> {
+    if !info.funds.is_empty() {
+        return Err(ContractError::Std(StdError::msg("Unexpected funds sent")));
+    }
     let config = CONFIG.load(deps.storage)?;
 
     // Load game by ID
@@ -200,7 +203,35 @@ fn determine_next_status(
 ) -> Result<GameStatus, ContractError> {
     match next_status {
         GameStatus::PlayerTurn => {
-            // TODO: Implement dealer peek
+            // Dealer peek + insurance check — must run before any hand logic
+            if !game.dealer_peeked && config.dealer_peeks {
+                if let Some(&upcard) = game.dealer_hand.first() {
+                    let rank = (upcard % 13) + 1;
+                    // Offer insurance for Ace upcard before peek
+                    if rank == 1 && game.dealer_hand.len() == 1 && game.insurance_bet.is_none() {
+                        game.current_turn = crate::state::TurnOwner::Player;
+                        return Ok(GameStatus::OfferingInsurance);
+                    }
+                    if rank == 1 || rank >= 10 {
+                        if game.dealer_hand.len() == 1 {
+                            // Pre-peek: request hole card reveal
+                            return Ok(GameStatus::WaitingForReveal {
+                                reveal_requests: vec![3],
+                                next_status: Box::new(GameStatus::PlayerTurn),
+                            });
+                        } else {
+                            // Post-peek: hole card just revealed
+                            game.dealer_peeked = true;
+                            let d_score = crate::contract::calculate_score(&game.dealer_hand);
+                            if d_score == 21 {
+                                return settle_game(game, d_score);
+                            }
+                            // No dealer BJ — fall through to normal PlayerTurn logic
+                        }
+                    }
+                }
+            }
+
             // Check player hand status
             let hand_idx = game.current_hand_index as usize;
             if hand_idx >= game.hands.len() {
@@ -213,102 +244,105 @@ fn determine_next_status(
             if p_score > 21 {
                 // Busted - mark hand and move to next hand or dealer turn
                 game.hands[hand_idx].status = HandStatus::Busted;
-                if hand_idx + 1 < game.hands.len() {
-                    game.current_hand_index = (hand_idx + 1) as u32;
-                    game.current_turn = crate::state::TurnOwner::Player;
-                    Ok(GameStatus::PlayerTurn)
-                } else {
-                    // All hands played. If every hand busted, settle immediately —
-                    // no need to reveal dealer hole card.
-                    let all_busted = game.hands.iter().all(|h| matches!(h.status, HandStatus::Busted));
-                    if all_busted {
-                        settle_game(game, 0) // d_score irrelevant, all hands busted
-                    } else {
-                        game.current_turn = crate::state::TurnOwner::Dealer;
-                        Ok(GameStatus::WaitingForReveal {
-                            reveal_requests: vec![3],
-                            next_status: Box::new(GameStatus::DealerTurn),
-                        })
-                    }
-                }
+                advance_or_dealer_turn(game, config)
             } else if p_score == 21 {
                 // 21 - auto-stand, move to next hand or dealer
-                if hand_idx + 1 < game.hands.len() {
-                    game.current_hand_index = (hand_idx + 1) as u32;
-                    game.current_turn = crate::state::TurnOwner::Player;
-                    Ok(GameStatus::PlayerTurn)
-                } else {
-                    game.current_turn = crate::state::TurnOwner::Dealer;
-                    Ok(GameStatus::WaitingForReveal {
-                        reveal_requests: vec![3],
-                        next_status: Box::new(GameStatus::DealerTurn),
-                    })
-                }
+                advance_or_dealer_turn(game, config)
             } else if matches!(hand.status, HandStatus::Doubled) {
                 // Doubled - auto-stand after one card
-                if hand_idx + 1 < game.hands.len() {
-                    game.current_hand_index = (hand_idx + 1) as u32;
-                    game.current_turn = crate::state::TurnOwner::Player;
-                    Ok(GameStatus::PlayerTurn)
-                } else {
-                    game.current_turn = crate::state::TurnOwner::Dealer;
-                    Ok(GameStatus::WaitingForReveal {
-                        reveal_requests: vec![3],
-                        next_status: Box::new(GameStatus::DealerTurn),
-                    })
-                }
+                advance_or_dealer_turn(game, config)
             } else {
                 game.current_turn = crate::state::TurnOwner::Player;
                 Ok(GameStatus::PlayerTurn)
             }
         }
-        GameStatus::DealerTurn => {
-            let d_score = crate::contract::calculate_score(&game.dealer_hand);
+        GameStatus::DealerTurn => process_dealer_turn(game, config),
+        _ => Ok(next_status.clone()),
+    }
+}
 
-            // Check if dealer needs to hit
-            if d_score < 17 {
-                // Dealer must hit — allocate next card index
-                let card_to_reveal = game.last_card_index;
-                game.last_card_index += 1;
-                Ok(GameStatus::WaitingForReveal {
-                    reveal_requests: vec![card_to_reveal],
-                    next_status: Box::new(GameStatus::DealerTurn),
-                })
-            } else if d_score == 17 && config.dealer_hits_soft_17 {
-                // Check if soft 17
-                let mut score = 0;
-                let mut aces = 0;
-                for &card in &game.dealer_hand {
-                    let val = (card % 13) + 1;
-                    if val == 1 {
-                        aces += 1;
-                        score += 11;
-                    } else if val > 10 {
-                        score += 10;
-                    } else {
-                        score += val;
-                    }
-                }
-                if aces > 0 && score == 17 {
-                    // Soft 17, dealer hits — allocate next card index
-                    let card_to_reveal = game.last_card_index;
-                    game.last_card_index += 1;
-                    Ok(GameStatus::WaitingForReveal {
-                        reveal_requests: vec![card_to_reveal],
-                        next_status: Box::new(GameStatus::DealerTurn),
-                    })
-                } else {
-                    // Hard 17, settle
-                    settle_game(game, d_score)
-                }
-            } else if d_score > 21 || d_score >= 17 {
-                // Dealer busted or stands, settle game
-                settle_game(game, d_score)
+/// Advance to next hand or transition to dealer turn.
+/// Used by PlayerTurn branch (bust/21/doubled) and execute_stand.
+pub(crate) fn advance_or_dealer_turn(
+    game: &mut GameSession,
+    config: &crate::state::Config,
+) -> Result<GameStatus, ContractError> {
+    let hand_idx = game.current_hand_index as usize;
+    if hand_idx + 1 < game.hands.len() {
+        game.current_hand_index = (hand_idx + 1) as u32;
+        game.current_turn = crate::state::TurnOwner::Player;
+        Ok(GameStatus::PlayerTurn)
+    } else {
+        // All hands played
+        let all_busted = game.hands.iter().all(|h| matches!(h.status, HandStatus::Busted));
+        if all_busted {
+            settle_game(game, 0)
+        } else if game.dealer_peeked {
+            // Card 3 already revealed during peek
+            process_dealer_turn(game, config)
+        } else {
+            game.current_turn = crate::state::TurnOwner::Dealer;
+            Ok(GameStatus::WaitingForReveal {
+                reveal_requests: vec![3],
+                next_status: Box::new(GameStatus::DealerTurn),
+            })
+        }
+    }
+}
+
+/// Process dealer turn logic: hit, stand, or settle.
+pub(crate) fn process_dealer_turn(
+    game: &mut GameSession,
+    config: &crate::state::Config,
+) -> Result<GameStatus, ContractError> {
+    let d_score = crate::contract::calculate_score(&game.dealer_hand);
+
+    if d_score < 17 {
+        if game.last_card_index >= 52 {
+            return Err(ContractError::Std(StdError::msg("Deck exhausted")));
+        }
+        let card_to_reveal = game.last_card_index;
+        game.last_card_index += 1;
+        Ok(GameStatus::WaitingForReveal {
+            reveal_requests: vec![card_to_reveal],
+            next_status: Box::new(GameStatus::DealerTurn),
+        })
+    } else if d_score == 17 && config.dealer_hits_soft_17 {
+        // Check if soft 17 (at least one ace counted as 11)
+        let mut score: u16 = 0;
+        let mut aces: u16 = 0;
+        for &card in &game.dealer_hand {
+            let val = (card % 13) + 1;
+            if val == 1 {
+                aces += 1;
+                score += 11;
+            } else if val > 10 {
+                score += 10;
             } else {
-                Ok(GameStatus::DealerTurn)
+                score += val as u16;
             }
         }
-        _ => Ok(next_status.clone()),
+        while score > 21 && aces > 0 {
+            score -= 10;
+            aces -= 1;
+        }
+        if aces > 0 && score == 17 {
+            if game.last_card_index >= 52 {
+                return Err(ContractError::Std(StdError::msg("Deck exhausted")));
+            }
+            let card_to_reveal = game.last_card_index;
+            game.last_card_index += 1;
+            Ok(GameStatus::WaitingForReveal {
+                reveal_requests: vec![card_to_reveal],
+                next_status: Box::new(GameStatus::DealerTurn),
+            })
+        } else {
+            settle_game(game, d_score)
+        }
+    } else if d_score > 21 || d_score >= 17 {
+        settle_game(game, d_score)
+    } else {
+        Ok(GameStatus::DealerTurn)
     }
 }
 
@@ -358,7 +392,7 @@ fn settle_game(game: &mut GameSession, d_score: u8) -> Result<GameStatus, Contra
 }
 
 /// Execute payouts based on game results
-fn execute_payouts(
+pub(crate) fn execute_payouts(
     storage: &mut dyn Storage,
     game: &GameSession,
     config: &crate::state::Config,
@@ -366,6 +400,7 @@ fn execute_payouts(
 ) -> Result<Response, ContractError> {
     let mut player_winnings = Uint128::zero();
     let total_player_bets: Uint128 = game.hands.iter().map(|h| h.bet).sum();
+    let insurance_bet = game.insurance_bet.unwrap_or(Uint128::zero());
 
     for hand in &game.hands {
         let winner = match &hand.status {
@@ -375,39 +410,43 @@ fn execute_payouts(
 
         match winner {
             "Player (Blackjack)" => {
-                // Blackjack pays 3:2 (or configured ratio)
                 let payout = config.blackjack_payout.calculate_payout(hand.bet);
                 player_winnings = player_winnings.checked_add(hand.bet + payout)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
             "Player" => {
-                // Standard win pays 1:1
                 let payout = config.standard_payout.calculate_payout(hand.bet);
                 player_winnings = player_winnings.checked_add(hand.bet + payout)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
             "Push" => {
-                // Push returns original bet
                 player_winnings = player_winnings.checked_add(hand.bet)
                     .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
             }
-            "Surrendered" => {
-                // Surrender returns half bet
-                let refund = hand.bet.checked_div(Uint128::new(2))
-                    .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
-                player_winnings = player_winnings.checked_add(refund)
-                    .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
-            }
             "Dealer" => {
-                // Dealer wins, player loses bet (no payout to player)
+                // Dealer wins, player loses bet
             }
             _ => {}
         }
     }
 
-    // Credit dealer: bankroll + total player bets - player winnings
+    // Insurance side bet settlement
+    if !insurance_bet.is_zero() {
+        let d_score = crate::contract::calculate_score(&game.dealer_hand);
+        let dealer_bj = d_score == 21 && game.dealer_hand.len() == 2;
+        if dealer_bj {
+            // Insurance pays out: return insurance bet + payout
+            let ins_payout = config.insurance_payout.calculate_payout(insurance_bet);
+            player_winnings = player_winnings.checked_add(insurance_bet + ins_payout)
+                .map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
+        }
+        // If no dealer BJ, insurance is lost — stays in the pool for dealer
+    }
+
+    // Credit dealer: bankroll + total player bets + insurance - player winnings
     let dealer_credit = game.bankroll
         .checked_add(total_player_bets).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
+        .checked_add(insurance_bet).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?
         .checked_sub(player_winnings).map_err(|e| ContractError::Std(StdError::msg(e.to_string())))?;
     let mut dealer_balance = DEALER_BALANCE.load(storage)?;
     dealer_balance = dealer_balance.checked_add(dealer_credit)

@@ -126,9 +126,9 @@ mod tests {
     use super::*;
     use crate::game::GameMode;
 
-    #[tokio::test]
-    async fn test_to_blackjack_state() {
-        let tui_state = TuiGameState::new(GameMode::Fast, 2).await.unwrap();
+    #[test]
+    fn test_to_blackjack_state() {
+        let tui_state = TuiGameState::new(GameMode::Fast, 2).unwrap();
         let bj_state = tui_state.to_blackjack_state();
 
         assert_eq!(bj_state.spots.len(), 2);

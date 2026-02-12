@@ -267,7 +267,7 @@ fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
     std::thread::sleep(std::time::Duration::from_secs(4));
     let games: Vec<juodzekas::msg::GameListItem> = query_contract(
         &dealer_client, &contract_addr,
-        &QueryMsg::ListGames { status_filter: Some("WaitingForPlayerJoin".to_string()) },
+        &QueryMsg::ListGames { status_filter: Some("WaitingForPlayerJoin".to_string()), limit: None, start_after: None },
     )?;
     let game_id = games.iter()
         .filter(|g| g.dealer == dealer_signer.address())
@@ -387,6 +387,15 @@ fn run_testnet_game(seed: u64) -> anyhow::Result<()> {
                 )?;
                 println!("Card {card_idx} revealed");
             }
+        } else if game.status.contains("OfferingInsurance") {
+            println!("Player: DeclineInsurance");
+            let tx = player_client.execute_contract(
+                contract_addr.clone(),
+                serde_json_wasm::to_vec(&ExecuteMsg::DeclineInsurance { game_id })?,
+                vec![], None, None,
+            ).map_err(|e| anyhow::anyhow!("DeclineInsurance TX: {e}"))?;
+            confirm_tx(&player_client, &tx.txhash)?;
+            println!("DeclineInsurance confirmed");
         } else if game.status.contains("PlayerTurn") {
             println!("Player: Stand");
             let tx = player_client.execute_contract(
@@ -497,6 +506,61 @@ fn find_seeds() {
     println!("Dealer blackjack seed: {:?}", dealer_bj_seed);
     assert!(dealer_hit_seed.is_some(), "No dealer-hit seed found in 0..10000");
     assert!(dealer_bj_seed.is_some(), "No dealer-blackjack seed found in 0..10000");
+}
+
+/// One-shot: instantiate contract from dealer mnemonic using an already-uploaded code_id.
+/// Usage: CODE_ID=1934 cargo test -p juodzekas --test testnet_zk deploy_contract -- --nocapture --ignored
+#[test]
+#[ignore]
+fn deploy_contract() {
+    use juodzekas::msg::InstantiateMsg;
+    dotenv().ok();
+    let rpc_url = get_env("RPC_URL");
+    let dealer_mnemonic = get_env("DEALER_MNEMONIC");
+    let code_id: u64 = get_env("CODE_ID").parse().expect("CODE_ID must be a number");
+
+    let dealer_signer = Arc::new(RustSigner::from_mnemonic(dealer_mnemonic, "xion".to_string(), None).unwrap());
+    let config = ChainConfig::new("xion-testnet-2".to_string(), rpc_url, "xion".to_string());
+    let client = Client::new_with_signer(config, dealer_signer.clone()).unwrap();
+    let sender = dealer_signer.address();
+    println!("Dealer: {sender}");
+
+    let msg = InstantiateMsg {
+        denom: "uxion".to_string(),
+        min_bet: Uint128::new(1000),
+        max_bet: Uint128::new(10000),
+        blackjack_payout: juodzekas::msg::PayoutRatio { numerator: 3, denominator: 2 },
+        insurance_payout: juodzekas::msg::PayoutRatio { numerator: 2, denominator: 1 },
+        standard_payout: juodzekas::msg::PayoutRatio { numerator: 1, denominator: 1 },
+        dealer_hits_soft_17: true,
+        dealer_peeks: true,
+        double_restriction: juodzekas::msg::DoubleRestriction::Any,
+        max_splits: 3,
+        can_split_aces: true,
+        can_hit_split_aces: false,
+        surrender_allowed: true,
+        shuffle_vk_id: "shuffle_encrypt".to_string(),
+        reveal_vk_id: "decrypt".to_string(),
+        timeout_seconds: Some(3600),
+    };
+    let msg_bytes = serde_json::to_vec(&msg).unwrap();
+
+    let tx = client.instantiate_contract(
+        Some(sender.clone()),
+        code_id,
+        Some("juodzekas-blackjack".to_string()),
+        msg_bytes,
+        vec![mob::Coin::new("uxion", "1000000")],
+        Some("Instantiate juodzekas".to_string()),
+        None,
+    ).unwrap();
+    println!("Instantiate TX: {}", tx.txhash);
+    if tx.code != 0 {
+        panic!("Broadcast rejected: {}", tx.raw_log);
+    }
+    confirm_tx(&client, &tx.txhash).unwrap();
+    println!("Instantiate confirmed! TX: {}", tx.txhash);
+    println!("Check the TX on explorer to find the contract address.");
 }
 
 /// Seed 42: dealer score >= 17 immediately, no dealer hits. Basic flow test.

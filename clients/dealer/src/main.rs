@@ -18,8 +18,8 @@ use zk_shuffle::shuffle::shuffle;
 
 // Re-export contract types
 use juodzekas::msg::{
-    DealerBalanceResponse, DoubleRestriction, GameListItem, GameResponse, InstantiateMsg,
-    PayoutRatio,
+    Config as ContractConfig, DealerBalanceResponse, DoubleRestriction, GameListItem,
+    GameResponse, InstantiateMsg, PayoutRatio,
 };
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
@@ -47,11 +47,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Store wasm, instantiate contract, deposit bankroll
+    /// Instantiate contract from an already-uploaded code ID and deposit bankroll
     Init {
-        /// Path to compiled .wasm file
+        /// Code ID from a previous wasm upload
         #[arg(long)]
-        wasm_path: String,
+        code_id: u64,
 
         /// Initial bankroll amount in base denom
         #[arg(long)]
@@ -117,9 +117,9 @@ enum Command {
         #[arg(long, default_value = "juodzekas-blackjack")]
         label: String,
 
-        /// Store code gas limit (wasm upload needs high gas)
-        #[arg(long, default_value = "50000000")]
-        store_gas: u64,
+        /// Allow deploying a config with negative house edge (player-favorable)
+        #[arg(long, env = "ALLOW_NEGATIVE_EDGE", default_value_t = false, action = clap::ArgAction::Set)]
+        allow_negative_edge: bool,
     },
 
     /// Run the dealer daemon (poll and auto-reveal)
@@ -130,6 +130,20 @@ enum Command {
         /// Auto-create new games after each settles
         #[arg(long, env = "AUTO_CREATE_GAME", default_value_t = true, action = clap::ArgAction::Set)]
         auto_create_game: bool,
+    },
+
+    /// Deposit bankroll into the contract
+    Deposit {
+        #[arg(long, env = "CONTRACT_ADDR")]
+        contract_addr: String,
+
+        /// Amount to deposit in base denom (uxion)
+        #[arg(long)]
+        amount: u128,
+
+        /// Token denomination
+        #[arg(long, default_value = "uxion")]
+        denom: String,
     },
 
     /// Withdraw all bankroll and exit
@@ -167,7 +181,7 @@ fn main() {
 
     match cli.command {
         Command::Init {
-            wasm_path,
+            code_id,
             bankroll,
             denom,
             min_bet,
@@ -184,13 +198,12 @@ fn main() {
             reveal_vk_id,
             timeout_seconds,
             label,
-            store_gas,
+            allow_negative_edge,
         } => {
             if let Err(e) = cmd_init(
                 &client,
-                &cli.rpc_url,
                 &address,
-                &wasm_path,
+                code_id,
                 bankroll,
                 &denom,
                 min_bet,
@@ -207,7 +220,7 @@ fn main() {
                 &reveal_vk_id,
                 timeout_seconds,
                 &label,
-                store_gas,
+                allow_negative_edge,
             ) {
                 log::error!("Init failed: {e}");
                 std::process::exit(1);
@@ -238,6 +251,19 @@ fn main() {
                 log::info!("Starting next game...");
             }
         }
+        Command::Deposit { contract_addr, amount, denom } => {
+            log::info!("Depositing {amount} {denom} to contract {contract_addr}...");
+            let msg_json = serde_json::json!({ "deposit_bankroll": {} });
+            let msg_bytes = serde_json::to_vec(&msg_json).unwrap();
+            let funds = vec![mob::Coin::new(&denom, &amount.to_string())];
+            match execute_and_confirm(&client, contract_addr, msg_bytes, funds, "Deposit bankroll") {
+                Ok(resp) => log::info!("Deposit confirmed! Hash: {}", resp.txhash),
+                Err(e) => {
+                    log::error!("Deposit failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Command::Withdraw { contract_addr } => {
             let config = DealerConfig {
                 contract_addr,
@@ -260,9 +286,8 @@ fn main() {
 #[allow(clippy::too_many_arguments)]
 fn cmd_init(
     client: &Client,
-    _rpc_url: &str,
     sender: &str,
-    wasm_path: &str,
+    code_id: u64,
     bankroll: u128,
     denom: &str,
     min_bet: u128,
@@ -279,23 +304,59 @@ fn cmd_init(
     reveal_vk_id: &str,
     timeout_seconds: u64,
     label: &str,
-    store_gas: u64,
+    allow_negative_edge: bool,
 ) -> Result<(), BoxErr> {
-    // 1. Read wasm file
-    log::info!("Reading wasm from {wasm_path}...");
-    let wasm_bytes = std::fs::read(wasm_path)
-        .map_err(|e| format!("Failed to read wasm file: {e}"))?;
-    log::info!("Wasm size: {} bytes", wasm_bytes.len());
-
-    // 2. Store code
-    log::info!("Storing code on chain (gas_limit={store_gas})...");
-    let store_response = broadcast_and_confirm_store(client, wasm_bytes, store_gas)?;
-    let code_id = extract_code_id(&store_response)?;
-    log::info!("Code stored: code_id={code_id}, tx={}", store_response.txhash);
-
-    // 3. Build InstantiateMsg
+    // Build InstantiateMsg
     let bj_payout = parse_payout_ratio(blackjack_payout)?;
     let double_res = parse_double_restriction(double_restriction)?;
+
+    // Edge check: compute house edge for this configuration
+    {
+        let edge_double_restriction = match &double_res {
+            DoubleRestriction::Any => blackjack::DoubleRestriction::Any,
+            DoubleRestriction::Hard9_10_11 => blackjack::DoubleRestriction::Hard9_10_11,
+            DoubleRestriction::Hard10_11 => blackjack::DoubleRestriction::Hard10_11,
+        };
+        let edge_payout = blackjack::PayoutRatio::new(bj_payout.numerator, bj_payout.denominator)
+            .map_err(|e| format!("Invalid payout ratio: {e}"))?;
+
+        let rules = blackjack::GameRules {
+            num_decks: 1, // Always single deck (ZK shuffle architecture)
+            dealer_hits_soft_17,
+            allow_surrender: surrender_allowed,
+            late_surrender: surrender_allowed,
+            double_after_split: true,
+            double_restriction: edge_double_restriction,
+            allow_resplit: max_splits > 1,
+            max_splits: max_splits as u8,
+            resplit_aces: can_split_aces && can_hit_split_aces,
+            dealer_peeks,
+            blackjack_payout: edge_payout,
+        };
+
+        log::info!("Computing house edge for this configuration...");
+        let result = blackjack::EdgeCalculator::new(rules).calculate();
+        log::info!(
+            "House edge: {:+.4}% (player return: {:+.4}%)",
+            result.house_edge * 100.0,
+            result.expected_return * 100.0
+        );
+
+        if result.house_edge < 0.0 {
+            if allow_negative_edge {
+                log::warn!(
+                    "Negative house edge ({:+.4}%) — dealer will lose money on average. Proceeding (--allow-negative-edge set).",
+                    result.house_edge * 100.0
+                );
+            } else {
+                return Err(format!(
+                    "Negative house edge ({:+.4}%). This config favors the player and will lose the dealer money. \
+                     Use --allow-negative-edge or ALLOW_NEGATIVE_EDGE=true to override.",
+                    result.house_edge * 100.0
+                ).into());
+            }
+        }
+    }
 
     let instantiate_msg = InstantiateMsg {
         denom: denom.to_string(),
@@ -349,19 +410,6 @@ fn cmd_init(
     Ok(())
 }
 
-fn broadcast_and_confirm_store(
-    client: &Client,
-    wasm_bytes: Vec<u8>,
-    gas_limit: u64,
-) -> Result<mob::TxResponse, BoxErr> {
-    let broadcast = client.store_code(wasm_bytes, Some("Store contract".to_string()), Some(gas_limit))?;
-    if broadcast.code != 0 {
-        return Err(format!("Store broadcast rejected: {}", broadcast.raw_log).into());
-    }
-    log::info!("Store TX broadcast: {}", broadcast.txhash);
-    poll_tx(client, &broadcast.txhash)
-}
-
 fn broadcast_and_confirm_instantiate(
     client: &Client,
     sender: &str,
@@ -403,34 +451,6 @@ fn poll_tx(client: &Client, txhash: &str) -> Result<mob::TxResponse, BoxErr> {
         }
     }
     Err("TX not confirmed after 30s".into())
-}
-
-fn extract_code_id(tx: &mob::TxResponse) -> Result<u64, BoxErr> {
-    // raw_log contains JSON array of events after DeliverTx
-    let events: serde_json::Value = serde_json::from_str(&tx.raw_log)
-        .map_err(|e| format!("Failed to parse raw_log: {e}\nraw_log: {}", tx.raw_log))?;
-
-    if let Some(arr) = events.as_array() {
-        for event in arr {
-            if let Some(ev_type) = event.get("type").and_then(|t| t.as_str()) {
-                if ev_type == "store_code" {
-                    if let Some(attrs) = event.get("attributes").and_then(|a| a.as_array()) {
-                        for attr in attrs {
-                            let key = attr.get("key").and_then(|k| k.as_str()).unwrap_or("");
-                            if key == "code_id" {
-                                let val = attr.get("value").and_then(|v| v.as_str()).unwrap_or("0");
-                                return val
-                                    .parse::<u64>()
-                                    .map_err(|e| format!("Invalid code_id: {e}").into());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Err(format!("code_id not found in TX events. raw_log: {}", tx.raw_log).into())
 }
 
 fn extract_contract_address(tx: &mob::TxResponse) -> Result<String, BoxErr> {
@@ -494,9 +514,14 @@ fn run_game(client: &Client, config: &DealerConfig, address: &str) -> Result<(),
     save_keys(&key_path, &sk, &pk)?;
     log::info!("Keys saved to {key_path}");
 
-    game_loop(client, config, game_id, &sk, &pk)?;
+    let result = game_loop(client, config, game_id, &sk, &pk);
 
-    Ok(())
+    // Clean up key file after game completes (settled or timed out)
+    if std::fs::remove_file(&key_path).is_ok() {
+        log::debug!("Cleaned up {key_path}");
+    }
+
+    result
 }
 
 fn create_game(
@@ -546,10 +571,16 @@ fn create_game(
         })
         .collect();
 
+    let shuffled_deck: Vec<String> = dealer_shuffle
+        .deck
+        .iter()
+        .map(|ct| Ok(general_purpose::STANDARD.encode(serialize_ciphertext(ct)?)))
+        .collect::<Result<Vec<_>, BoxErr>>()?;
+
     let msg_json = serde_json::json!({
         "create_game": {
-            "public_key": general_purpose::STANDARD.encode(serialize_point(&dealer_keys.pk)),
-            "shuffled_deck": dealer_shuffle.deck.iter().map(|ct| general_purpose::STANDARD.encode(serialize_ciphertext(ct))).collect::<Vec<_>>(),
+            "public_key": general_purpose::STANDARD.encode(serialize_point(&dealer_keys.pk)?),
+            "shuffled_deck": shuffled_deck,
             "proof": general_purpose::STANDARD.encode(&proof_json),
             "public_inputs": public_inputs_strs,
         }
@@ -602,49 +633,110 @@ fn game_loop(
     sk: &Fr,
     pk: &Point,
 ) -> Result<(), BoxErr> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    // Query contract config once for timeout_seconds
+    let contract_config: ContractConfig =
+        rt.block_on(query_config(&config.rpc_url, &config.contract_addr))?;
+    // Allow generous buffer (2x contract timeout) before dealer claims
+    let claim_after = std::time::Duration::from_secs(contract_config.timeout_seconds * 2);
+    let game_start = std::time::Instant::now();
+    let mut consecutive_query_failures: u32 = 0;
+
     loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let game: GameResponse = rt.block_on(query_game_by_id(
+        let game: GameResponse = match rt.block_on(query_game_by_id(
             &config.rpc_url,
             &config.contract_addr,
             game_id,
-        ))?;
-        drop(rt);
+        )) {
+            Ok(g) => {
+                consecutive_query_failures = 0;
+                g
+            }
+            Err(e) => {
+                consecutive_query_failures += 1;
+                log::warn!(
+                    "Query failed ({consecutive_query_failures}x): {e}"
+                );
+                if consecutive_query_failures >= 30 {
+                    return Err(format!(
+                        "Game {game_id}: giving up after {consecutive_query_failures} consecutive query failures"
+                    ).into());
+                }
+                continue;
+            }
+        };
 
         let status = &game.status;
 
         if status.contains("WaitingForPlayerJoin") {
+            // Check if we've waited too long for a player
+            if game_start.elapsed() > claim_after {
+                log::warn!("No player joined after {:?}, claiming timeout", game_start.elapsed());
+                match claim_timeout(client, config, game_id) {
+                    Ok(_) => log::info!("Timeout claimed for game {game_id}"),
+                    Err(e) => log::error!("Failed to claim timeout: {e}"),
+                }
+                return Ok(());
+            }
             log::debug!("Waiting for player to join...");
             continue;
         }
 
         if status.contains("WaitingForReveal") {
-            handle_reveals(client, config, game_id, &game, sk, pk)?;
+            handle_reveals(client, config, game_id, &game, sk, pk);
             continue;
         }
 
-        if status.contains("PlayerTurn") {
+        if status.contains("OfferingInsurance") {
+            log::debug!("Waiting for player insurance decision...");
+        } else if status.contains("PlayerTurn") {
             log::debug!("Player's turn...");
-            continue;
-        }
-
-        if status.contains("DealerTurn") {
+        } else if status.contains("DealerTurn") {
             log::debug!("Dealer turn (contract auto-processes)...");
-            continue;
-        }
-
-        if status.contains("Settled") {
+        } else if status.contains("Settled") {
             log::info!("Game {game_id} settled: {status}");
             log_game_results(&game);
             return Ok(());
+        } else {
+            log::warn!("Unknown game status: {status}");
         }
 
-        log::warn!("Unknown game status: {status}");
+        // For any non-settled, non-reveal status: check if player timed out
+        if game_start.elapsed() > claim_after {
+            log::warn!("Game {game_id} stale ({:?} elapsed), attempting timeout claim", game_start.elapsed());
+            match claim_timeout(client, config, game_id) {
+                Ok(_) => {
+                    log::info!("Timeout claimed for game {game_id}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Timeout claim may fail if not enough time passed on-chain yet
+                    log::debug!("Timeout claim failed (may not be eligible yet): {e}");
+                }
+            }
+        }
     }
+}
+
+fn claim_timeout(client: &Client, config: &DealerConfig, game_id: u64) -> Result<(), BoxErr> {
+    let msg_json = serde_json::json!({ "claim_timeout": { "game_id": game_id } });
+    let msg_bytes = serde_json::to_vec(&msg_json)?;
+    let tx = execute_and_confirm(
+        client,
+        config.contract_addr.clone(),
+        msg_bytes,
+        vec![],
+        "Claim timeout",
+    )?;
+    if tx.code != 0 {
+        return Err(format!("Claim timeout TX failed: {}", tx.raw_log).into());
+    }
+    Ok(())
 }
 
 fn handle_reveals(
@@ -654,7 +746,7 @@ fn handle_reveals(
     game: &GameResponse,
     sk: &Fr,
     pk: &Point,
-) -> Result<(), BoxErr> {
+) {
     let reveal_requests = parse_reveal_requests(&game.status);
 
     let already_submitted: Vec<u32> = game
@@ -666,17 +758,19 @@ fn handle_reveals(
 
     for &card_idx in &reveal_requests {
         if !already_submitted.contains(&card_idx) {
-            submit_reveal(client, config, game_id, card_idx, game, sk, pk)?;
+            if let Err(e) = submit_reveal(client, config, game_id, card_idx, game, sk, pk) {
+                log::error!("Reveal failed for card {card_idx}: {e}");
+            }
         }
     }
 
     for pr in &game.pending_reveals {
         if pr.dealer_partial.is_none() && !reveal_requests.contains(&pr.card_index) {
-            submit_reveal(client, config, game_id, pr.card_index, game, sk, pk)?;
+            if let Err(e) = submit_reveal(client, config, game_id, pr.card_index, game, sk, pk) {
+                log::error!("Reveal failed for card {}: {e}", pr.card_index);
+            }
         }
     }
-
-    Ok(())
 }
 
 fn submit_reveal(
@@ -838,17 +932,20 @@ fn log_game_results(game: &GameResponse) {
     log::info!("  Dealer: [{}]", dealer_cards.join(", "));
 }
 
-fn serialize_point(p: &Point) -> Vec<u8> {
+fn serialize_point(p: &Point) -> Result<Vec<u8>, BoxErr> {
     let mut buf = Vec::new();
-    p.serialize_compressed(&mut buf).unwrap();
-    buf
+    p.serialize_compressed(&mut buf)
+        .map_err(|e| format!("Failed to serialize point: {e}"))?;
+    Ok(buf)
 }
 
-fn serialize_ciphertext(ct: &Ciphertext) -> Vec<u8> {
+fn serialize_ciphertext(ct: &Ciphertext) -> Result<Vec<u8>, BoxErr> {
     let mut buf = Vec::new();
-    ct.c0.serialize_compressed(&mut buf).unwrap();
-    ct.c1.serialize_compressed(&mut buf).unwrap();
-    buf
+    ct.c0.serialize_compressed(&mut buf)
+        .map_err(|e| format!("Failed to serialize ciphertext c0: {e}"))?;
+    ct.c1.serialize_compressed(&mut buf)
+        .map_err(|e| format!("Failed to serialize ciphertext c1: {e}"))?;
+    Ok(buf)
 }
 
 fn save_keys(path: &str, sk: &Fr, pk: &Point) -> Result<(), BoxErr> {
@@ -912,6 +1009,15 @@ async fn query_dealer_balance(
 ) -> Result<DealerBalanceResponse, BoxErr> {
     let query_bytes =
         serde_json::to_vec(&serde_json::json!({ "get_dealer_balance": {} }))?;
+    let response_bytes = query_contract_raw(rpc_url, contract_addr, &query_bytes).await?;
+    Ok(serde_json::from_slice(&response_bytes)?)
+}
+
+async fn query_config(
+    rpc_url: &str,
+    contract_addr: &str,
+) -> Result<ContractConfig, BoxErr> {
+    let query_bytes = serde_json::to_vec(&serde_json::json!({ "get_config": {} }))?;
     let response_bytes = query_contract_raw(rpc_url, contract_addr, &query_bytes).await?;
     Ok(serde_json::from_slice(&response_bytes)?)
 }

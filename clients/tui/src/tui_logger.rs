@@ -27,9 +27,9 @@ impl Log for TuiLogger {
             let msg = format!("{}", record.args());
             if let Ok(mut buffer) = self.log_buffer.lock() {
                 buffer.push(msg);
-                // Keep only last 100 messages to prevent memory issues
                 if buffer.len() > 100 {
-                    buffer.remove(0);
+                    let excess = buffer.len() - 100;
+                    buffer.drain(..excess);
                 }
             }
         }

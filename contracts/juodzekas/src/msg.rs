@@ -48,6 +48,8 @@ pub enum ExecuteMsg {
     DoubleDown { game_id: u64 },
     Split { game_id: u64 },
     Surrender { game_id: u64 },
+    Insurance { game_id: u64 },
+    DeclineInsurance { game_id: u64 },
     // Phase 3, 4, 5: Submit reveal and proof for a card
     SubmitReveal {
         game_id: u64,
@@ -76,7 +78,7 @@ pub enum QueryMsg {
     #[returns(GameResponse)]
     GetGame { game_id: u64 },
     #[returns(Vec<GameListItem>)]
-    ListGames { status_filter: Option<String> },
+    ListGames { status_filter: Option<String>, limit: Option<u32>, start_after: Option<u64> },
     #[returns(DealerBalanceResponse)]
     GetDealerBalance {},
     #[returns(DealerResponse)]

@@ -6,7 +6,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_json_binary(&query_config(deps)?),
         QueryMsg::GetGame { game_id } => to_json_binary(&query_game(deps, game_id)?),
-        QueryMsg::ListGames { status_filter } => to_json_binary(&query_list_games(deps, status_filter)?),
+        QueryMsg::ListGames { status_filter, limit, start_after } => to_json_binary(&query_list_games(deps, status_filter, limit, start_after)?),
         QueryMsg::GetDealerBalance {} => to_json_binary(&query_dealer_balance(deps)?),
         QueryMsg::GetDealer {} => to_json_binary(&query_dealer(deps)?),
     }
@@ -55,29 +55,33 @@ fn query_game(deps: Deps, game_id: u64) -> StdResult<GameResponse> {
     })
 }
 
-fn query_list_games(deps: Deps, status_filter: Option<String>) -> StdResult<Vec<GameListItem>> {
+fn query_list_games(deps: Deps, status_filter: Option<String>, limit: Option<u32>, start_after: Option<u64>) -> StdResult<Vec<GameListItem>> {
+    let max_limit = limit.unwrap_or(30).min(100) as usize;
+    let start = start_after.map(|id| cw_storage_plus::Bound::exclusive(id));
+
     let games: Result<Vec<GameListItem>, _> = GAMES
-        .range(deps.storage, None, None, Order::Ascending)
-        .map(|item| {
-            let (game_id, game) = item?;
-            let status_str = format!("{:?}", game.status);
-
-            // Apply status filter if provided
-            if let Some(ref filter) = status_filter {
-                if !status_str.contains(filter) {
-                    return Ok(None);
+        .range(deps.storage, start, None, Order::Ascending)
+        .filter_map(|item| {
+            match item {
+                Ok((game_id, game)) => {
+                    let status_str = format!("{:?}", game.status);
+                    if let Some(ref filter) = status_filter {
+                        if !status_str.contains(filter) {
+                            return None;
+                        }
+                    }
+                    Some(Ok(GameListItem {
+                        game_id,
+                        dealer: game.dealer.to_string(),
+                        player: game.player.to_string(),
+                        status: status_str,
+                        bet: game.bet,
+                    }))
                 }
+                Err(e) => Some(Err(e)),
             }
-
-            Ok(Some(GameListItem {
-                game_id,
-                dealer: game.dealer.to_string(),
-                player: game.player.to_string(),
-                status: status_str,
-                bet: game.bet,
-            }))
         })
-        .filter_map(|r| r.transpose())
+        .take(max_limit)
         .collect();
 
     games

@@ -10,10 +10,13 @@ pub struct PayoutRatio {
 
 impl PayoutRatio {
     pub fn calculate_payout(&self, bet: Uint128) -> Uint128 {
+        // numerator/denominator are u16 (max 65535) and bet is bounded by max_bet,
+        // so overflow is practically impossible. But panic on overflow instead of
+        // silently returning a wrong value.
         bet.checked_mul(Uint128::new(self.numerator as u128))
-            .unwrap_or(bet)
+            .expect("payout multiplication overflow")
             .checked_div(Uint128::new(self.denominator as u128))
-            .unwrap_or(bet)
+            .expect("payout division by zero")
     }
 }
 
@@ -54,13 +57,11 @@ pub enum TurnOwner {
 #[cw_serde]
 pub enum GameStatus {
     WaitingForPlayerJoin,
-    WaitingForDealerJoin,
-    WaitingForPlayerShuffle,
-    WaitingForDealerShuffle,
     WaitingForReveal {
         reveal_requests: Vec<u32>, // Indices of cards to be revealed
         next_status: Box<GameStatus>,
     },
+    OfferingInsurance,
     PlayerTurn,
     DealerTurn,
     Settled {
@@ -86,6 +87,8 @@ pub struct GameSession {
     pub last_action_timestamp: u64, // Timestamp of last action for timeout tracking
     pub last_card_index: u32,
     pub pending_reveals: Vec<PendingReveal>, // Track partial decryptions from both parties
+    pub dealer_peeked: bool,
+    pub insurance_bet: Option<Uint128>,
 }
 
 #[cw_serde]

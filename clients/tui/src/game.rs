@@ -42,20 +42,20 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub async fn new(mode: GameMode, num_spots: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(mode: GameMode, num_spots: usize) -> Result<Self, Box<dyn std::error::Error>> {
         if num_spots == 0 || num_spots > 8 {
             return Err("Number of spots must be between 1 and 8".into());
         }
 
-        Self::new_with_spots(mode, num_spots).await
+        Self::new_with_spots(mode, num_spots)
     }
 
-    pub async fn new_uninitialized(mode: GameMode) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new_uninitialized(mode: GameMode) -> Result<Self, Box<dyn std::error::Error>> {
         // Create with 1 spot as placeholder - will be resized before dealing
-        Self::new_with_spots(mode, 1).await
+        Self::new_with_spots(mode, 1)
     }
 
-    async fn new_with_spots(mode: GameMode, num_spots: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new_with_spots(mode: GameMode, num_spots: usize) -> Result<Self, Box<dyn std::error::Error>> {
 
         let mut rng = ChaCha8Rng::from_entropy();
 
@@ -283,26 +283,29 @@ impl GameState {
         }
 
         let spot = self.active_spot;
-        let hand = &mut self.player_hands[spot][0];
+        let hand_idx = self.active_hand_in_spot;
+        let hand = &mut self.player_hands[spot][hand_idx];
 
-        // Remove the second card from the first hand
+        // Remove the second card from the active hand
         let second_card = hand.pop().ok_or("No second card to split")?;
 
-        // Create a new hand with the second card
-        self.player_hands[spot].push(vec![second_card]);
+        // Create a new hand with the second card (inserted right after the active hand)
+        let new_hand_idx = hand_idx + 1;
+        self.player_hands[spot].insert(new_hand_idx, vec![second_card]);
 
-        // Initialize doubled/stood for the new hand
-        self.hands_doubled[spot].push(false);
-        self.hands_stood[spot].push(false);
+        // Initialize doubled/stood/surrendered for the new hand
+        self.hands_doubled[spot].insert(new_hand_idx, false);
+        self.hands_stood[spot].insert(new_hand_idx, false);
+        self.hands_surrendered[spot].insert(new_hand_idx, false);
 
-        // Deal one card to each hand
-        self.active_hand_in_spot = 0;
+        // Deal one card to the original hand, one to the new hand
+        self.active_hand_in_spot = hand_idx;
         self.draw_card(false, Some(spot))?;
-        self.active_hand_in_spot = 1;
+        self.active_hand_in_spot = new_hand_idx;
         self.draw_card(false, Some(spot))?;
 
-        // Reset to first hand
-        self.active_hand_in_spot = 0;
+        // Reset to the original hand
+        self.active_hand_in_spot = hand_idx;
 
         Ok(())
     }
@@ -338,14 +341,8 @@ impl GameState {
         };
 
         // Check for soft hand (Ace counted as 11)
-        let has_ace = hand.iter().any(|c| {
-            if let Some(card) = c {
-                card.value() == 11
-            } else {
-                false
-            }
-        });
-        let is_soft = has_ace && player_value <= 21;
+        let cards: Vec<Card> = hand.iter().filter_map(|&c| c).collect();
+        let is_soft = blackjack::is_soft_hand(&cards);
 
         // Check for surrender (before split/double)
         if self.can_surrender() {
